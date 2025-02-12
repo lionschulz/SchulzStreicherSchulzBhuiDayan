@@ -1,0 +1,3147 @@
+---
+title: "PLOS CB Analysis Code"
+output: html_notebook
+---
+
+
+# Set-up
+
+```{r}
+library(here)
+source(here("functions/load_all_functions_and_libraries.R"))
+```
+
+# Data
+
+We load combined data
+
+```{r}
+df_participant_summary <- read.csv(here("data/paper_data/df_participant_summary.csv"), check.names = FALSE)
+df_post_block_trust_improvement <- read.csv(here("data/paper_data/df_post_block_trust_improvement.csv"))
+df_epist_trust <- read.csv(here(here("data/paper_data/df_epist_trust.csv")), check.names = FALSE)
+df_main_task <- read.csv(here("data/paper_data/df_main_task.csv"))
+df_main_task_wide <- read.csv(here("data/paper_data/df_main_task_wide.csv"))
+```
+
+And the model files
+
+```{r}
+model_to_use <- "full"
+
+model_fits <- list(
+  with_ic = ".csv",
+  without_ic = ".csv"
+)
+
+model_fits
+```
+
+
+```{r}
+df_model_predictions_with_ic <- read.csv(here(paste0("data/paper_data/model/df_model_predictions_with_ic", model_fits[["with_ic"]])))
+df_ML_fit_parameters_with_ic <- read.csv(here(paste0("data/paper_data/model/df_ML_fit_parameters_with_ic", model_fits[["with_ic"]])))
+df_model_predictions_without_ic <- read.csv(here(paste0("data/paper_data/model/df_model_predictions_without_ic", model_fits[["without_ic"]])))
+df_ML_fit_parameters_without_ic <- read.csv(here(paste0("data/paper_data/model/df_ML_fit_parameters_without_ic", model_fits[["without_ic"]])))
+
+df_optimal_model_predictions_with_ic <- read.csv(here("data/paper_data/model/df_optimal_model_with_ic.csv"))
+df_optimal_model_predictions_without_ic <- read.csv(here("data/paper_data/model/df_optimal_model_without_ic.csv"))
+
+```
+
+Minor processing of data
+
+```{r}
+df_post_block_trust_improvement$source_type <- get_sources_in_correct_order(df_post_block_trust_improvement$source_type)
+df_main_task$source_type <- get_sources_in_correct_order(df_main_task$source_type)
+df_main_task_wide$source_type <- get_sources_in_correct_order(df_main_task_wide$source_type)
+df_model_predictions_with_ic$source_type <- get_sources_in_correct_order(df_model_predictions_with_ic$source_type)
+df_model_predictions_without_ic$source_type <- get_sources_in_correct_order(df_model_predictions_without_ic$source_type)
+df_optimal_model_predictions_with_ic$source_type <- get_sources_in_correct_order(df_optimal_model_predictions_with_ic$source_type)
+df_optimal_model_predictions_without_ic$source_type <- get_sources_in_correct_order(df_optimal_model_predictions_without_ic$source_type)
+```
+
+
+## Exclusion
+
+N before exclusion
+
+```{r}
+df_participant_summary %>% 
+  group_by(condition) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+### Comprehension questions
+
+```{r}
+df_participant_summary %>% 
+  ggplot(aes(times_comprehension_wrong)) + 
+    geom_histogram(binwidth = 1) +
+    scale_x_continuous(breaks = 0:max(df_participant_summary$times_comprehension_wrong),
+                       limits = c(-.5,max(df_participant_summary$times_comprehension_wrong)+ .5)) +
+    ggtitle("Number of incorrect comprehension questions") +
+    geom_vline(xintercept = 2.5, colour = "red") + 
+    facet_grid(.~condition)
+```
+
+```{r}
+exclude_participants_with_more_than_x_comp_qs_wrong <- 2
+
+participants_to_exclude_based_on_comp_check <- unique(
+  df_participant_summary %>%
+    filter(times_comprehension_wrong > exclude_participants_with_more_than_x_comp_qs_wrong))$completion_code
+
+df_participant_summary %>%
+  filter(times_comprehension_wrong > exclude_participants_with_more_than_x_comp_qs_wrong) %>% 
+  group_by(condition) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+
+### Catch-Questiions
+
+```{r}
+df_participant_summary %>%
+  filter(catch != 3) %>% 
+  group_by(condition) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+```{r}
+participants_to_exclude_based_on_catch_q <- unique((df_participant_summary %>%
+  filter(catch != 3))$completion_code)
+```
+
+
+```{r}
+all_participants_to_exclude <- union(participants_to_exclude_based_on_catch_q, participants_to_exclude_based_on_comp_check)
+all_participants_to_exclude
+```
+
+### Run exclusion on datafiles
+
+```{r}
+exclude_participants <- function(df, participants_to_exclude) {
+  return(
+    df %<>%
+      filter(! completion_code %in% participants_to_exclude)
+  )
+}
+```
+
+```{r}
+df_main_task <- exclude_participants(df_main_task, all_participants_to_exclude)
+df_main_task_wide <- exclude_participants(df_main_task_wide, all_participants_to_exclude)
+df_participant_summary <- exclude_participants(df_participant_summary, all_participants_to_exclude)
+```
+
+
+### Check Exclusions
+
+```{r}
+df_participant_summary %>% 
+  group_by(condition) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+```{r}
+df_participant_summary %>% 
+  group_by(with_) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+
+
+```{r}
+df_main_task_wide  %>% 
+  group_by(with_independent_council) %>% 
+  summarise(length(unique(completion_code)))
+```
+
+
+Check whether the exclusions worked correctly
+
+```{r}
+all(sort(unique(df_main_task$completion_code)) == sort(unique(df_main_task_wide$completion_code)))
+all(sort(unique(df_main_task_wide$completion_code)) == sort(unique(df_participant_summary$completion_code)))
+```
+
+... and whether this lines up with the exclusions done before the modelling
+
+```{r}
+length(unique(df_model_predictions_without_ic$completion_code))
+length(unique(df_model_predictions_with_ic$completion_code))
+nrow(df_ML_fit_parameters_without_ic)
+nrow(df_ML_fit_parameters_with_ic)
+
+
+all(
+  sort(c(unique(df_model_predictions_with_ic$completion_code), unique(df_model_predictions_without_ic$completion_code))) ==
+  sort(unique(df_participant_summary$completion_code))
+)
+```
+
+---------------------
+
+
+
+# Analysis proper
+
+## Regression Analyses
+
+### Single main block and probe trials
+
+```{r}
+run_regression_all_pipeline <- FALSE
+```
+
+
+```{r, warning=FALSE}
+if(run_regression_all_pipeline){
+
+  df_regression_betas <- get_regression_betas(
+    df_main_task_wide = df_main_task_wide,
+    only_look_at_second_half = TRUE
+    )
+  
+  df_regression_betas <- left_join(
+      df_participant_summary %>% 
+      select(completion_code, condition),
+    df_regression_betas,
+    by = "completion_code"
+  )
+
+  df_regression_betas_model_with_ic <- get_regression_betas(
+    df_main_task_wide = df_model_predictions_with_ic,
+    only_look_at_second_half = TRUE
+  )
+  
+  df_regression_betas_model_without_ic <- get_regression_betas(
+    df_main_task_wide = df_model_predictions_without_ic,
+    only_look_at_second_half = TRUE
+  )
+
+  df_regression_betas_model <- bind_rows(
+    df_regression_betas_model_with_ic,
+    df_regression_betas_model_without_ic
+  )
+  
+  df_regression_betas_model <- left_join(
+      df_participant_summary %>% 
+      select(completion_code, condition),
+    df_regression_betas_model,
+    by = "completion_code"
+  )
+
+  df_regression_betas <- left_join(
+    df_regression_betas,
+    df_regression_betas_model,
+    by = c("completion_code", "condition", "source_type"),
+    suffix = c("_data", "_model")
+  )
+
+  write.csv(
+    here(
+      paste0("data/paper_data/analysis_output/df_regression_betas_all", model_to_use, ".csv")
+      ))
+
+} else {
+  
+  df_regression_betas <- read.csv(here("data/paper_data/analysis_output/df_regression_betas_all.csv"))
+  
+}
+```
+
+
+
+### Over time
+
+#### Pooled
+
+```{r}
+run_regressions_over_time <- FALSE
+```
+
+```{r, warning = FALSE}
+if(run_regressions_over_time){
+  
+  df_beta_over_time_pooled_without_ic <- 
+    get_betas_for_all_participants_split_by_block_quarter(
+      df_main_task_wide %>%
+        filter(with_independent_council == "false"),
+      with_independent_council = FALSE
+    )
+  
+  df_beta_over_time_pooled_with_ic <- 
+    get_betas_for_all_participants_split_by_block_quarter(
+      df_main_task_wide %>%
+        filter(with_independent_council == "true"),
+      with_independent_council = TRUE
+    )
+  
+  df_beta_over_time_pooled <- 
+    bind_rows(
+      df_beta_over_time_pooled_with_ic,
+      df_beta_over_time_pooled_without_ic,
+    )
+  
+  df_beta_over_time_pooled_model_with_ic <- get_betas_for_all_participants_split_by_block_quarter(
+    df_model_predictions_with_ic,
+    with_independent_council = TRUE
+    )
+  
+  df_beta_over_time_pooled_model_without_ic <- get_betas_for_all_participants_split_by_block_quarter(
+    df_model_predictions_without_ic,
+    with_independent_council = FALSE
+    )
+  
+  df_beta_over_time_pooled_model <- 
+    bind_rows(
+      df_beta_over_time_pooled_model_with_ic,
+      df_beta_over_time_pooled_model_without_ic,
+    )
+  
+  
+  df_beta_over_time_pooled_model_and_data <- left_join(
+    df_beta_over_time_pooled,
+    df_beta_over_time_pooled_model,
+    by = c("with_independent_council", "news_station_first", "source_type", "block_quarter"),
+    suffix = c("_data", "_model")
+  )
+
+  write.csv(
+    df_beta_over_time_pooled_model_and_data,
+    here(
+      paste0("data/paper_data/analysis_output/df_beta_over_time_pooled", model_to_use, ".csv")
+      )
+  )
+} else {
+  
+  df_beta_over_time_pooled_model_and_data <- read.csv(here("data/paper_data/analysis_output/df_beta_over_time_pooled.csv"))
+  
+}
+```
+
+#### Unpooled
+
+
+```{r}
+run_split_half_regressions <- FALSE
+```
+
+```{r, warning=FALSE}
+if(run_split_half_regressions){
+  
+  df_beta_over_time <- get_regression_betas_split_by_half(df_main_task_wide)
+  df_beta_over_time_model_with_ic <- get_regression_betas_split_by_half(df_model_predictions_with_ic)
+  df_beta_over_time_model_without_ic <- get_regression_betas_split_by_half(df_model_predictions_without_ic)
+
+  df_beta_over_time_model <- bind_rows(
+    df_beta_over_time_model_with_ic,
+    df_beta_over_time_model_without_ic
+  )
+  
+  df_beta_over_time_all <- left_join(
+    df_beta_over_time,
+    df_beta_over_time_model,
+    by = c("completion_code", "source_type", "block_half"),
+    suffix = c("_data", "_model")
+  )
+  
+  df_beta_over_time_all <- left_join(
+    df_participant_summary %>% 
+        select(completion_code, condition),
+    df_beta_over_time_all,
+    by = "completion_code"
+  )
+  
+  write.csv(
+    df_beta_over_time_all, 
+    here(
+      paste0("data/paper_data/analysis_output/df_beta_over_time_all", model_to_use,".csv")
+      )
+    )
+
+} else {
+    
+  df_beta_over_time_all <- read.csv(here("data/paper_data/analysis_output/df_beta_over_time_all.csv"))  
+  
+}
+```
+
+
+```{r}
+df_regression_betas$source_type <- get_sources_in_correct_order(df_regression_betas$source_type)
+df_beta_over_time_pooled_model_and_data$source_type <- get_sources_in_correct_order(df_beta_over_time_pooled_model_and_data$source_type)
+df_beta_over_time_all$source_type <- get_sources_in_correct_order(df_beta_over_time_all$source_type)
+```
+
+
+# With Feedback Analysis
+
+## Figure 1: Probe Trial Responses
+
+```{r}
+point_size_data_prediction_dynamics <- 2.5
+errorbar_width_data_prediction_dynamics <- .5
+
+pl_station_only_data_without_ic <- df_main_task %>% 
+  filter(with_independent_council == "false") %>% 
+  filter(block_stage == "station_only") %>% 
+  group_by(source_type, num_blue_news) %>% 
+  summarise(mean_confidence = mean(response), sem_confidence = std.error(response)) %>% 
+  mutate(mean_confidence = mean_confidence/100,
+         sem_confidence = sem_confidence / 100) %>% 
+  ggplot(aes(num_blue_news, mean_confidence, color = source_type, group = source_type)) + 
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_confidence + sem_confidence,
+                      ymax = mean_confidence - sem_confidence),
+                  width = errorbar_width_data_prediction_dynamics, position = position_dodge(width = .2)) +
+    geom_hline(yintercept = .5, colour = "grey") +
+    scale_color_manual(values = custom_colours$source_types) +
+    ggtitle("Probe Trial Response") +
+    labs(x = "Blue in news station", y = "Confidence in blue (Data)") + 
+    theme(aspect.ratio = 1) +
+    scale_y_continuous(breaks = c(0,.5,1)) +
+    guides(color = "none")
+
+pl_station_only_data_without_ic
+```
+
+```{r}
+m_probe_regression_without_ic <- glm(data =  df_main_task %>% 
+    filter(with_independent_council == "false") %>% 
+    filter(block_stage == "station_only") %>% 
+    mutate(response = response/100) %>% 
+    select(completion_code, num_blue_news, source_type, response),
+  formula = response ~ as.numeric(num_blue_news) * source_type,
+  family = binomial)
+
+anova(m_probe_regression_without_ic ,test='Chisq')
+```
+
+
+
+```{r, fig.width=9, fig.height=3.7}
+custom_labels$news_station_axis <- "News Station"
+custom_labels$source_type_shorthand <- c("H", "R", "O", "B")
+
+pl_probe_slopes_data_without_ic <- df_regression_betas %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(source_type, slope_source_only_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+  
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3, size =  point_size_data_prediction_dynamics) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    ggtitle("Confidence Slopes")+
+    theme(aspect.ratio = 1) +
+    scale_x_discrete(
+      name = custom_labels$news_station_axis,
+      labels = custom_labels$source_type_shorthand
+      ) +
+    scale_y_continuous(
+      name = "Slope (Data)",
+      breaks = -1:1
+    )
+
+
+pl_probe_intercept_data_without_ic <- df_regression_betas %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(source_type, intercept_source_only_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3, size =  point_size_data_prediction_dynamics) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+    
+    # facet_grid(.~source_type) +
+    ggtitle("Confidence Intercepts") +
+    theme(aspect.ratio = 1)+
+    scale_x_discrete(
+      name = custom_labels$news_station_axis,
+      labels = custom_labels$source_type_shorthand
+      ) +
+    scale_y_continuous(
+      name = "Intercept (Data)",
+      breaks = -1:1
+    )
+  
+  
+pl_probe_slopes_data_without_ic + pl_probe_intercept_data_without_ic
+
+```
+
+
+We test for the significance of these - first against each other
+
+```{r}
+print("Slope")
+
+m_aov_probe_slopes_without_ic <- aov(
+  data = df_regression_betas %>% filter(condition == "With"),
+  formula = slope_source_only_data ~ source_type)
+
+print(summary(m_aov_probe_slopes_without_ic))
+
+print(TukeyHSD(m_aov_probe_slopes_without_ic))
+
+
+
+# pairwise.t.test(
+#    (df_regression_betas %>% filter(condition == "With"))$slope_source_only_data, 
+#    (df_regression_betas %>% filter(condition == "With"))$source_type,
+#    p.adj = "none")
+
+report(m_aov_probe_slopes_without_ic)
+```
+
+
+
+```{r}
+print("Intercept")
+
+m_aov_probe_intercepts_without_ic <- aov(
+  data = df_regression_betas %>% filter(condition == "With"),
+  formula = intercept_source_only_data ~ source_type)
+
+print(summary(m_aov_probe_intercepts_without_ic))
+
+print(TukeyHSD(m_aov_probe_intercepts_without_ic))
+
+# pairwise.t.test(
+#    (df_regression_betas %>% filter(condition == "With"))$intercept_source_only_data, 
+#    (df_regression_betas %>% filter(condition == "With"))$source_type,
+#    p.adj = "none")
+
+report(m_aov_probe_intercepts_without_ic)
+
+```
+
+... and then against null 
+
+```{r}
+t_tests_probe_betas_against_null_without_ic <- list(
+  "slope" = list(),
+  "intercept" = list()
+)
+
+all_source_types <- c("helpful", "random", "opposite", "bluebias")
+
+for (beta in c("slope", "intercept")) {
+  
+  print(beta)
+  
+  for (source_to_test in all_source_types) {
+  
+    print(paste(beta, " -- ", source_to_test))
+    
+    t_tests_probe_betas_against_null_without_ic[[beta]][[source_to_test]] <- t.test(
+      (df_regression_betas %>% 
+        filter(condition == "With", source_type == source_to_test))[[paste0(beta,"_source_only_data")]])
+    
+    print(
+      t_tests_probe_betas_against_null_without_ic[[beta]][[source_to_test]]
+    )
+  }
+}
+```
+
+```{r}
+report(t_tests_probe_betas_against_null_without_ic$slope$opposite)
+report(t_tests_probe_betas_against_null_without_ic$intercept$bluebias)
+```
+
+
+```{r}
+pl_station_only_model_without_ic <- df_model_predictions_without_ic %>% 
+  filter(block_stage == "station_only") %>% 
+  mutate(num_blue_news = X_F, response = posterior_blue_F) %>% 
+  group_by(source_type, num_blue_news) %>% 
+  summarise(mean_confidence = mean(response), sem_confidence = std.error(response)) %>% 
+  ggplot(aes(num_blue_news, mean_confidence, color = source_type, group = source_type)) + 
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_confidence + sem_confidence,
+                      ymax = mean_confidence - sem_confidence),
+                  width = errorbar_width_data_prediction_dynamics, position = position_dodge(width = .2)) +
+    geom_hline(yintercept = .5, colour = "grey") +
+    scale_color_manual(values = custom_colours$source_types) +
+    # ggtitle("Probe trial responses") +
+    labs(x = "Blue in news station", y = "Confidence in blue (Model)") + 
+    theme(aspect.ratio = 1) +
+    scale_y_continuous(breaks = c(0,.5,1)) +
+    guides(color = "none")
+
+pl_station_only_model_without_ic
+```
+
+```{r}
+alpha_level_for_0_point <- 0.5
+
+pl_probe_slope_corr_without_ic <- df_regression_betas %>%
+  filter(condition == "With") %>% 
+  ggplot(aes(slope_source_only_data, slope_source_only_model)) +
+  # stat_cor() +
+  # geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed") +
+  geom_point(
+    aes(color = source_type),
+    size =  point_size_data_prediction_dynamics,
+    alpha = .9) +
+  scale_colour_manual(
+    values = custom_colours$source_types,
+    name = "News\nStation"
+    ) +
+   geom_smooth(method = "lm", alpha = .5, colour = "black") +
+  theme(aspect.ratio = 1) + guides(color = "none") +
+  coord_fixed() +
+  ylab("Model") + xlab("Data") +
+  scale_x_continuous(
+    name = "Slope (Data)",
+    breaks = -1:1) +
+  scale_y_continuous(
+    name = "Slope (Model)",
+    breaks = -1:1)
+
+  
+pl_probe_slope_corr_without_ic
+```
+
+We test this
+
+```{r}
+corr_slopes_probe_without_ic <- cor.test(
+  (df_regression_betas %>% filter(condition == "With"))$slope_source_only_data,
+  (df_regression_betas %>% filter(condition == "With"))$slope_source_only_model
+  )
+corr_slopes_probe_without_ic
+report(corr_slopes_probe_without_ic)
+```
+
+
+
+```{r}
+pl_probe_intercept_corr_without_ic <- df_regression_betas %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(intercept_source_only_data, intercept_source_only_model)) +
+    # stat_cor() +
+    geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed") +
+    geom_point(
+      aes(color = source_type),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation"
+      ) +
+    geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + guides(color = "none") +
+    coord_fixed(xlim = c(-2,1.7), ylim = c(-2,1.7)) +
+    ylab("Model") + xlab("Data") +
+    scale_x_continuous(
+      name = "Intercept (Data)",
+      breaks = -2:1) +
+    scale_y_continuous(
+      name = "Intercept (Model)",
+      breaks = -2:1)
+
+pl_probe_intercept_corr_without_ic
+```
+
+```{r}
+corr_intercept_probe_without_ic <- cor.test(
+  (df_regression_betas %>% filter(condition == "With"))$intercept_source_only_data,
+  (df_regression_betas %>% filter(condition == "With"))$intercept_source_only_model
+  )
+corr_intercept_probe_without_ic
+report(corr_intercept_probe_without_ic)
+```
+
+
+```{r, fig.width=11.9, fig.height=7.7}
+pls_probe_without_ic <- pl_station_only_data_without_ic + 
+  pl_probe_slopes_data_without_ic + 
+  pl_probe_intercept_data_without_ic +
+  pl_station_only_model_without_ic +
+  pl_probe_slope_corr_without_ic +
+  pl_probe_intercept_corr_without_ic +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_level = "A")
+pls_probe_without_ic
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_probe_without_ic.pdf",
+  pls_probe_without_ic,
+  width = 11.9,
+  height = 7.7
+)
+```
+
+
+
+
+
+## Figure 2: General Dynamics:
+
+```{r, fig.height=3.7}
+ylims_slope <- c(-1.1, 2.1) # this is for plotting conjointly with the feedback version for my AB meeting
+ylims_intercept_without_ic_dynamcis <- c(-1.1, .2)
+
+custom_labels$block_quarter <- "Block Quarter"
+
+pl_slope_over_time_data_without_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == FALSE) %>% 
+  ggplot(aes(block_quarter, slope_data, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_errorbar(aes(ymin = slope_data + slope_sem_data,
+                    ymax = slope_data - slope_sem_data),
+                width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                     name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    ggtitle("Main Trial Slope") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    theme(aspect.ratio = 1) +
+    xlab("Block Quarter") + 
+    scale_y_continuous(
+      limits = ylims_slope,
+      name = "Slope (Data)")
+
+pl_intercept_over_time_data_without_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == FALSE) %>% 
+  ggplot(aes(block_quarter, intercept_data, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+      geom_errorbar(aes(ymin = intercept_data + intercept_sem_data,
+                      ymax = intercept_data - intercept_sem_data),
+                  width = .2, position = position_dodge(width = .2)) +
+      scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    ggtitle("Main Trial Intercept") +
+    theme(aspect.ratio = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3)+
+    xlab("Block Quarter") +
+    scale_y_continuous(
+      limits = ylims_intercept_without_ic_dynamcis,
+      name = "Intercept (Data)")
+
+pl_slope_over_time_data_without_ic
+pl_intercept_over_time_data_without_ic
+
+
+pl_accuracy_over_time_data_without_ic <- df_main_task %>% 
+  filter(
+    block_stage != "station_only",
+    condition == "With") %>% 
+  group_by(block_quarter, source_type) %>% 
+  summarise(mean_accuracy = mean(accuracy),
+            sem_accuracy = std.error(accuracy)) %>% 
+  ggplot(aes(block_quarter, mean_accuracy, color = source_type)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_accuracy + sem_accuracy,
+                      ymax = mean_accuracy - sem_accuracy),
+                  width = .2, position = position_dodge(width = .2)) +
+    ggtitle("Average Accuracy") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    theme(aspect.ratio = 1) + 
+    guides(color = "none") +
+    scale_x_continuous(name = custom_labels$block_quarter) +
+    scale_y_continuous(name = "Accuracy (Data)")
+
+pl_accuracy_over_time_data_without_ic
+```
+
+
+We do inferential statistics for this
+
+```{r}
+m_response_regression_without_ic <- glm(
+  data = df_main_task %>% 
+    filter(with_independent_council == "false") %>% 
+    filter(block_stage != "station_only") %>% 
+    select(completion_code, num_blue_news, source_type, response, accuracy, trial_number_within_block) %>% 
+    mutate(response = response/100),
+  formula = response ~ trial_number_within_block * num_blue_news *  source_type,
+  family = binomial)
+# summary(m_response_regression_without_ic)
+anova(m_response_regression_without_ic ,test='Chisq')
+
+```
+
+
+```{r}
+m_accuracy_regression_without_ic <- glm(
+  data = df_main_task %>% 
+    filter(with_independent_council == "false") %>% 
+    filter(block_stage != "station_only") %>% 
+    select(completion_code, num_blue_news, source_type, accuracy, trial_number_within_block),
+  formula = accuracy ~ trial_number_within_block * source_type,
+  family = binomial)
+# summary(m_accuracy_regression_without_ic)
+anova(m_accuracy_regression_without_ic ,test='Chisq')
+```
+
+
+
+```{r}
+
+
+pl_slope_over_time_model_without_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == FALSE) %>% 
+  ggplot(aes(block_quarter, slope_model, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_errorbar(aes(ymin = slope_model + slope_sem_model,
+                    ymax = slope_model - slope_sem_model),
+                width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                     name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    # ggtitle("Main trial slope") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    theme(aspect.ratio = 1) +
+    xlab("Block Quarter") + ylab("Slope (Model)") +
+    scale_y_continuous()
+
+pl_intercept_over_time_model_without_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == FALSE) %>% 
+  ggplot(aes(block_quarter, intercept_model, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+      geom_errorbar(aes(ymin = intercept_model + intercept_sem_model,
+                      ymax = intercept_model - intercept_sem_model),
+                  width = .2, position = position_dodge(width = .2)) +
+      scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    # ggtitle("Main trial intercept") +
+    theme(aspect.ratio = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3)+
+    xlab("Block Quarter") + 
+    scale_y_continuous(name = "Intercept (Model)", limits = ylims_intercept_without_ic_dynamcis) 
+
+pl_slope_over_time_model_without_ic
+pl_intercept_over_time_model_without_ic
+```
+
+```{r}
+df_model_predictions_without_ic %<>%
+  mutate(accuracy = a_I == ground_truth)
+
+pl_accuracy_over_time_model_without_ic <- df_model_predictions_without_ic %>% 
+  filter(
+    block_stage != "station_only",
+    condition == "With") %>% 
+  group_by(block_quarter, source_type) %>% 
+  summarise(mean_accuracy = mean(accuracy),
+            sem_accuracy = std.error(accuracy)) %>% 
+  ggplot(aes(block_quarter, mean_accuracy, color = source_type)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_accuracy + sem_accuracy,
+                      ymax = mean_accuracy - sem_accuracy),
+                  width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    theme(aspect.ratio = 1) + 
+    guides(color = "none") +
+    xlab(custom_labels$block_quarter) + ylab("Accuracy (Model)")
+
+pl_accuracy_over_time_model_without_ic
+```
+
+```{r, fig.width=11, fig.height=7}
+pls_dynamics_pooled_without_ic <- pl_slope_over_time_data_without_ic + 
+  pl_intercept_over_time_data_without_ic +
+  pl_accuracy_over_time_data_without_ic + 
+  pl_slope_over_time_model_without_ic + 
+  pl_intercept_over_time_model_without_ic +
+  pl_accuracy_over_time_model_without_ic+ 
+  plot_layout(guides = 'collect') + 
+  plot_annotation(tag_levels = "A")
+pls_dynamics_pooled_without_ic
+```
+
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_pooled_without_ic_ylims.pdf",
+  pls_dynamics_pooled_without_ic,
+  width = 11,
+  height = 7
+)
+```
+
+
+
+## Figure 3: Personal dynamics
+
+
+
+```{r, fig.width=9, fig.height=3.7}
+ylims_indiv_slope <- c(-4, 5.5)
+ylims_indiv_intercept <- c(-4, 2)
+
+pl_slope_split_half_data_without_ic <- df_beta_over_time_all %>%
+  filter(condition == "With") %>% 
+  mutate(block_half = as.factor(block_half)) %>% 
+  ggplot(aes(block_half, slope_data, colour = source_type)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_boxplot(colour = "black", alpha = 0.2, fill = 'black', outlier.alpha = 0) +
+    geom_point(alpha = .2) +
+    geom_line(aes(group = completion_code), alpha = .1) +
+    facet_grid(.~source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                   name = "News\nStation") + 
+  # ggtitle("Slope by Block Half", subtitle = "(Individual Participant Betas)") +
+  ylab("Slope (Data)") + xlab("Block Half") +
+  scale_y_continuous(limits = ylims_indiv_slope) + 
+    guides(color = "none") + 
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  ) +
+  ggtitle("Confidence Slope")
+
+pl_slope_split_half_data_without_ic
+
+pl_intercept_split_half_data_without_ic <-  df_beta_over_time_all %>%
+  filter(condition == "With") %>% 
+  mutate(block_half = as.factor(block_half)) %>% 
+  ggplot(aes(block_half, intercept_data, colour = source_type)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_boxplot(colour = "black", alpha = 0.2, fill = 'black', outlier.alpha = 0) +
+    geom_point(alpha = .2) +
+    geom_line(aes(group = completion_code), alpha = .1) +
+    facet_grid(.~source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                   name = "News\nStation") +
+  # ggtitle("Intercept by Block Half", subtitle = "(Individual Participant Betas)") +
+  ylab("Intercept (Data)") + xlab("Block Half") +
+  plot_layout(guides="collect") +
+  scale_y_continuous(limits = ylims_indiv_intercept)+ 
+    guides(color = "none") +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  ) +
+  ggtitle("Confidence Intercept")
+
+pl_slope_split_half_data_without_ic + pl_intercept_split_half_data_without_ic + plot_layout(guides = "collect")
+```
+
+
+```{r}
+m_aov_slopes_without_ic <-  aov(
+    data = df_beta_over_time_all %>%
+      filter(condition == "With"),
+    formula = slope_data ~ as.factor(block_half) * source_type
+  )
+
+summary(m_aov_slopes_without_ic)
+report(m_aov_slopes_without_ic)
+```
+
+
+```{r}
+TukeyHSD(m_aov_slopes_without_ic)
+```
+
+
+```{r}
+m_aov_intercept_without_ic <-  aov(
+  data = df_beta_over_time_all %>%
+      filter(condition == "With"),
+  formula = intercept_data ~ as.factor(block_half) * source_type
+)
+
+summary(m_aov_intercept_without_ic)
+report(m_aov_intercept_without_ic)
+```
+
+
+```{r}
+TukeyHSD(m_aov_intercept_without_ic)
+```
+
+
+
+```{r}
+df_diff_beta_over_time <- df_beta_over_time_all %>% 
+  pivot_wider(
+    id_cols = 
+      c('completion_code', 'source_type', 'condition'),
+      names_from = 'block_half',
+      values_from = c('slope_data', 'intercept_data', 'slope_model', 'intercept_model')) %>% 
+  mutate(
+    diff_slope_data = slope_data_2 - slope_data_1, diff_intercept_data = intercept_data_2 - intercept_data_1,
+    diff_slope_model = slope_model_2 - slope_model_1, diff_intercept_model = intercept_model_2 - intercept_model_1
+    )
+
+df_diff_beta_over_time
+```
+
+
+
+
+```{r}
+pl_diff_slope_data_without_ic <- df_diff_beta_over_time %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(source_type, diff_slope_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    geom_hline(yintercept = 0) # + 
+    # facet_grid(.~source_type) +
+    # ggtitle("D(slopes) 1st to 2nd half")
+pl_diff_slope_data_without_ic
+
+pl_diff_intercept_data_without_ic <- df_diff_beta_over_time %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(source_type, diff_intercept_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    geom_hline(yintercept = 0) # + 
+    # facet_grid(.~source_type) +
+    # ggtitle("D(slopes) 1st to 2nd half")
+pl_diff_intercept_data_without_ic
+```
+
+
+```{r}
+(df_diff_beta_over_time %>% 
+  filter(
+    condition == "With",
+    source_type == "helpful"))$diff_slope_data
+
+t.test((df_diff_beta_over_time %>% 
+  filter(
+    condition == "With",
+    source_type == "helpful"))$diff_slope_data)
+```
+
+
+```{r}
+pl_slope_corr_without_ic <- df_beta_over_time_all %>%
+  filter(condition == "With") %>% 
+  ggplot(aes(slope_data, slope_model)) +
+  # stat_cor() +
+  # geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed")
+    geom_point(
+      aes(color = source_type, shape = as.factor(block_half)),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation"
+      ) +
+     geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + guides(color = "none") +
+    coord_fixed() +
+    scale_shape_manual(values = c(16,1), name  = "Block Half") +
+    scale_x_continuous(
+      name = "Slope (Data)",
+      breaks = c(-2,0,2,4)
+    ) +
+    scale_y_continuous(
+      name = "Slope (Model)",
+      breaks = c(-2,0,2,4)
+    )
+pl_slope_corr_without_ic
+
+pl_intercept_corr_without_ic <- df_beta_over_time_all %>%
+  filter(condition == "With") %>% 
+  ggplot(aes(intercept_data, intercept_model)) +
+  # stat_cor() +
+  geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed") +
+    geom_point(
+      aes(color = source_type, shape = as.factor(block_half)),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation",
+      labels = custom_labels$source_type
+      ) +
+    scale_shape_manual(values = c(16,1), name  = "Block Half") +
+    geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + # guides(color = "none") +
+    coord_fixed() +
+    scale_x_continuous(
+      name = "Intercept (Data)",
+      breaks = c(-4,-2,0,2)
+    ) +
+    scale_y_continuous(
+      name = "Intercept (Model)",
+      breaks = c(-4,-2,0,2,4)
+    )
+pl_intercept_corr_without_ic
+```
+
+
+```{r}
+cor_slope_main_without_ic <- cor.test(
+  (df_beta_over_time_all %>%  filter(condition == "With"))$slope_data,
+  (df_beta_over_time_all %>%  filter(condition == "With"))$slope_model
+)
+cor_slope_main_without_ic
+report(cor_slope_main_without_ic)
+```
+
+
+```{r}
+cor_intercept_main_without_ic <- cor.test(
+  (df_beta_over_time_all %>%  filter(condition == "With"))$intercept_data,
+  (df_beta_over_time_all %>%  filter(condition == "With"))$intercept_model
+)
+cor_intercept_main_without_ic
+report(cor_intercept_main_without_ic)
+```
+
+
+
+```{r, fig.width=11, fig.height=7.4}
+pls_dynamics_indiv_without_ic <- (pl_slope_split_half_data_without_ic |
+  pl_intercept_split_half_data_without_ic | 
+  pl_diff_slope_data_without_ic | 
+  pl_diff_intercept_data_without_ic) /
+  (pl_slope_corr_without_ic | pl_intercept_corr_without_ic) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+pls_dynamics_indiv_without_ic  
+```
+
+
+```{r, fig.width=11, fig.height=7.4}
+pls_dynamics_indiv_without_ic_small <- (pl_slope_split_half_data_without_ic |
+  pl_intercept_split_half_data_without_ic ) /
+  (pl_slope_corr_without_ic | pl_intercept_corr_without_ic) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+
+pls_dynamics_indiv_without_ic_small
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_indiv_without_ic_small.pdf",
+  pls_dynamics_indiv_without_ic_small,
+  width = 11,
+  height = 7.4
+)
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_indiv_without_ic.pdf",
+  pls_dynamics_indiv_without_ic,
+  width = 11,
+  height = 7.4
+)
+```
+
+
+## Model and data
+
+#### Evolution of the belief state
+
+
+```{r}
+custom_plot_settings <- list(
+  alpha_belief_state = .15
+)
+
+df_mean_belief_state_without_ic <- df_model_predictions_without_ic %>% 
+  filter(block_stage != "station_only") %>% 
+  mutate(mean_belief_state = (b_F_estimate + g_F_estimate) / 2) %>% 
+  group_by(
+    trial_number_within_block,
+    source_type
+  ) %>% 
+  summarize(
+    average_mean_belief_state = mean(mean_belief_state),
+    average_b_F = mean(b_F_estimate),
+    average_g_F = mean(g_F_estimate)
+  )
+
+
+
+pl_mean_belief_state_without_ic <- df_model_predictions_without_ic %>% 
+  filter(block_stage != "station_only") %>% 
+  mutate(mean_belief_state = (b_F_estimate + g_F_estimate) / 2) %>% 
+  ggplot(aes(trial_number_within_block, mean_belief_state)) +
+    geom_line(
+      aes(colour = source_type, group = completion_code), 
+      alpha = custom_plot_settings$alpha_belief_state,
+      size = 1) + 
+    facet_grid(.~source_type) +
+    guides(colour = "none") +
+    geom_line(
+        data = df_mean_belief_state_without_ic, 
+        aes(trial_number_within_block, average_mean_belief_state), 
+        size = 1,
+        alpha = .7) +
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    scale_y_continuous(limits = c(0,1)) +
+    xlab("Trial number within block") +
+    ylab("Mean Belief State") +
+    scale_color_manual(values = custom_colours$source_types) + 
+    theme(
+      strip.background = element_rect(colour="white", fill="white"),
+      strip.text = element_text(face = 'bold')
+      ) +
+    ggtitle("Model Belief States")
+
+pl_mean_belief_state_without_ic
+```
+
+
+### Model details
+
+We first compute summary parameters
+
+```{r}
+df_ML_fit_parameters_without_ic %<>% 
+  mutate(
+    updating_ratio = alpha_weight / beta_weight,
+    prior_mean = (beta_b_mean + beta_g_mean) / 2 
+    )
+df_ML_fit_parameters_without_ic
+
+```
+
+```{r}
+pl_updating_distribution_without_ic<- df_ML_fit_parameters_without_ic %>% 
+  ggplot(aes(updating_ratio)) +
+    geom_histogram(fill = "royalblue", colour = "black") +
+    scale_y_continuous(breaks = c(0,15,30), name = "Count") +
+    xlab("Updating Ratio") +
+    scale_x_continuous(limits = c(0, 4.1))
+pl_updating_distribution_without_ic
+```
+
+
+```{r}
+pl_prior_distribution_without_ic  <-df_ML_fit_parameters_without_ic %>% 
+  ggplot(aes(prior_mean)) +
+    geom_histogram(fill = "royalblue", colour = "black") +
+    ggtitle("Fit Parameters")+
+    scale_y_continuous(breaks = c(0,20,40), name = "Count") +
+    xlab("Prior Mean")
+```
+
+
+We build a larger personal dynamics figure
+
+```{r, fig.width=10, fig.height=11}
+pls_indiv_model_without_ic <- (pl_slope_split_half_data_without_ic |
+  pl_intercept_split_half_data_without_ic ) /
+  (pl_slope_corr_without_ic | pl_intercept_corr_without_ic) /
+  ((pl_mean_belief_state_without_ic | (pl_prior_distribution_without_ic / pl_updating_distribution_without_ic)) +
+  plot_layout(widths = c(1.8,1))) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+pls_indiv_model_without_ic
+```
+
+
+```{r}
+mean(df_ML_fit_parameters_without_ic$prior_mean)
+sd(df_ML_fit_parameters_without_ic$prior_mean)
+
+mean(df_ML_fit_parameters_without_ic$updating_ratio)
+sd(df_ML_fit_parameters_without_ic$updating_ratio)
+
+t.test(df_ML_fit_parameters_without_ic$updating_ratio - 1)
+report(t.test(df_ML_fit_parameters_without_ic$updating_ratio - 1))
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_indiv_model_without_ic.pdf",
+  pls_indiv_model_without_ic,
+  width = 10, height = 11
+)
+```
+
+# Without Feedback Analysis 
+
+## Figure 4: Probe Trials
+
+```{r}
+pl_station_only_data_with_ic <- df_main_task %>% 
+  filter(with_independent_council == "true") %>% 
+  filter(block_stage == "station_only") %>% 
+  group_by(source_type, num_blue_news) %>% 
+  summarise(mean_confidence = mean(response), sem_confidence = std.error(response)) %>% 
+  mutate(mean_confidence = mean_confidence/100,
+         sem_confidence = sem_confidence / 100) %>% 
+  ggplot(aes(num_blue_news, mean_confidence, color = source_type, group = source_type)) + 
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_confidence + sem_confidence,
+                      ymax = mean_confidence - sem_confidence),
+                  width = errorbar_width_data_prediction_dynamics, position = position_dodge(width = .2)) +
+    geom_hline(yintercept = .5, colour = "grey") +
+    scale_color_manual(values = custom_colours$source_types) +
+    ggtitle("Probe Trial Response") +
+    labs(x = "Blue in news station", y = "Confidence in blue (Data)") + 
+    theme(aspect.ratio = 1) +
+    scale_y_continuous(breaks = c(0,.5,1), limits = 0:1) +
+    guides(color = "none", fill = "none")
+
+pl_station_only_data_with_ic
+```
+
+We do the inferential statistics for this
+
+```{r}
+m_probe_regression_with_ic <- glm(
+  data =  df_main_task %>% 
+    filter(with_independent_council == "true") %>% 
+    filter(block_stage == "station_only") %>% 
+    mutate(response = response/100) %>% 
+    select(completion_code, num_blue_news, source_type, response),
+  formula = response ~ as.numeric(num_blue_news) * source_type,
+  family = binomial)
+
+anova(m_probe_regression_with_ic ,test='Chisq')
+```
+
+
+
+
+```{r, fig.width=9, fig.height=3.7}
+pl_probe_slopes_data_with_ic <- df_regression_betas %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(source_type, slope_source_only_data, 
+             colour = source_type, fill = source_type)) + 
+      geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+  
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3, size =  point_size_data_prediction_dynamics) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    ggtitle("Confidence Slopes")+
+    theme(aspect.ratio = 1) +
+    scale_x_discrete(
+      name = custom_labels$news_station_axis,
+      labels = custom_labels$source_type_shorthand
+      ) +
+    scale_y_continuous(
+      name = "Slope (Data)",
+      breaks = -1:1
+    )
+
+
+
+pl_probe_intercept_data_with_ic <- df_regression_betas %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(source_type, intercept_source_only_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3, size =  point_size_data_prediction_dynamics) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                      labels = custom_labels$source_type) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+    
+    # facet_grid(.~source_type) +
+    ggtitle("Confidence Intercepts") +
+    theme(aspect.ratio = 1)+
+    scale_x_discrete(
+      name = custom_labels$news_station_axis,
+      labels = custom_labels$source_type_shorthand
+      ) +
+    scale_y_continuous(
+      name = "Intercept (Data)",
+      breaks = -1:1
+    )
+  
+  
+  
+pl_probe_slopes_data_with_ic + pl_probe_intercept_data_with_ic
+```
+
+
+```{r}
+m_aov_probe_slopes_with_ic <- aov(
+  data = df_regression_betas %>% filter(condition == "Without"),
+  formula = slope_source_only_data ~ source_type)
+
+print(summary(m_aov_probe_slopes_with_ic))
+
+TukeyHSD(m_aov_probe_slopes_with_ic)
+
+
+m_aov_probe_intercepts_with_ic <- aov(
+  data = df_regression_betas %>% filter(condition == "Without"),
+  formula = intercept_source_only_data ~ source_type)
+
+print(summary(m_aov_probe_intercepts_with_ic))
+
+TukeyHSD(m_aov_probe_intercepts_with_ic)
+```
+
+
+```{r}
+t_tests_probe_betas_against_null_with_ic <- list(
+  "slope" = list(),
+  "intercept" = list()
+)
+
+all_source_types <- c("helpful", "random", "opposite", "bluebias")
+
+for (beta in c("slope", "intercept")) {
+  
+  print(beta)
+  
+  for (source_to_test in all_source_types) {
+  
+    print(source_to_test)
+    
+    t_tests_probe_betas_against_null_with_ic[[beta]][[source_to_test]] <- t.test(
+      (df_regression_betas %>% 
+        filter(condition == "Without", source_type == source_to_test))[[paste0(beta,"_source_only_data")]])
+    
+    print(
+      t_tests_probe_betas_against_null_with_ic[[beta]][[source_to_test]]
+    )
+  }
+}
+```
+
+
+```{r}
+report(t_tests_probe_betas_against_null_with_ic$slope$random)
+report(t_tests_probe_betas_against_null_with_ic$slope$opposite)
+report(t_tests_probe_betas_against_null_with_ic$intercept$bluebias)
+```
+
+
+```{r}
+pl_station_only_model_with_ic <- df_model_predictions_with_ic %>% 
+  filter(block_stage == "station_only") %>% 
+  mutate(num_blue_news = X_F, response = posterior_blue_F) %>% 
+  group_by(source_type, num_blue_news) %>% 
+  summarise(mean_confidence = mean(response), sem_confidence = std.error(response)) %>% 
+  ggplot(aes(num_blue_news, mean_confidence, color = source_type, group = source_type)) + 
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_confidence + sem_confidence,
+                      ymax = mean_confidence - sem_confidence),
+                  width = errorbar_width_data_prediction_dynamics, position = position_dodge(width = .2)) +
+    geom_hline(yintercept = .5, colour = "grey") +
+    scale_color_manual(values = custom_colours$source_types) +
+    # ggtitle("Probe trial responses") +
+    labs(x = "Blue in news station", y = "Confidence in blue (Model)") + 
+    theme(aspect.ratio = 1) +
+    scale_y_continuous(breaks = c(0,.5,1), limits = 0:1) +
+    guides(color = "none")
+
+pl_station_only_model_with_ic
+```
+
+```{r}
+
+pl_probe_slope_corr_with_ic <- df_regression_betas %>%
+  filter(condition == "Without") %>% 
+  ggplot(aes(slope_source_only_data, slope_source_only_model)) +
+  # stat_cor() +
+  geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed") +
+  geom_point(
+    aes(color = source_type),
+    size =  point_size_data_prediction_dynamics,
+    alpha = .9) +
+  scale_colour_manual(
+    values = custom_colours$source_types,
+    name = "News\nStation"
+    ) +
+   geom_smooth(method = "lm", alpha = .5, colour = "black") +
+  theme(aspect.ratio = 1) + guides(color = "none") +
+  coord_fixed()  +
+  scale_x_continuous(
+    name = "Slope (Data)",
+    breaks = -1:1) +
+  scale_y_continuous(
+    name = "Slope (Model)",
+    breaks = -1:1)
+
+
+  
+pl_probe_slope_corr_with_ic
+```
+
+```{r}
+pl_probe_intercept_corr_with_ic <- df_regression_betas %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(intercept_source_only_data, intercept_source_only_model)) +
+    # stat_cor() +
+    geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed") +
+    geom_point(
+      aes(color = source_type),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation"
+      ) +
+    geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + guides(color = "none") +
+    coord_fixed(xlim = c(-1.3,1.3), ylim = c(-1.3,1.3)) +
+    scale_x_continuous(
+      name = "Intercept (Data)",
+      breaks = -2:1) +
+    scale_y_continuous(
+      name = "Intercept (Model)",
+      breaks = -2:1)
+
+pl_probe_intercept_corr_with_ic
+```
+
+We test for the correlations
+
+```{r}
+cor.test(
+  (df_regression_betas %>% filter(condition == "Without"))$slope_source_only_data,
+  (df_regression_betas %>% filter(condition == "Without"))$slope_source_only_model
+  )
+
+cor.test(
+  (df_regression_betas %>% filter(condition == "Without"))$intercept_source_only_data,
+  (df_regression_betas %>% filter(condition == "Without"))$intercept_source_only_model
+  )
+```
+
+
+```{r, fig.width=11.9, fig.height=7.7}
+pls_probe_with_ic <- pl_station_only_data_with_ic + 
+  pl_probe_slopes_data_with_ic + 
+  pl_probe_intercept_data_with_ic +
+  pl_station_only_model_with_ic +
+  pl_probe_slope_corr_with_ic +
+  pl_probe_intercept_corr_with_ic +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+pls_probe_with_ic
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_probe_with_ic.pdf",
+  pls_probe_with_ic,
+  height = 7.7,
+  width = 11.9
+)
+```
+
+
+## Figure 5: General Dynamics
+
+```{r, fig.height=3.7}
+ylims_slope_without_ic <- c(-.3, 1.5) 
+ylims_intercept_without_ic  <- c(-.35, .2)
+ylims_accuracy_with_ic <- c(.17,.9)
+ybreaks_accuracy_with_ic <- c(2:9/10)
+
+pl_slope_over_time_data_with_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == TRUE) %>% 
+  ggplot(aes(block_quarter, slope_data, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_errorbar(aes(ymin = slope_data + slope_sem_data,
+                    ymax = slope_data - slope_sem_data),
+                width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                     name = "News\nStation",
+                     labels = custom_labels$source_type) +
+    ggtitle("Main Trial Slope") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    theme(aspect.ratio = 1) +
+    xlab("Block Quarter") + 
+    scale_y_continuous(
+      limits = ylims_slope_without_ic,
+      name = "Slope (Data)")
+
+pl_intercept_over_time_data_with_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == TRUE) %>% 
+  ggplot(aes(block_quarter, intercept_data, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+      geom_errorbar(aes(ymin = intercept_data + intercept_sem_data,
+                      ymax = intercept_data - intercept_sem_data),
+                  width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                     name = "News\nStation",
+                     labels = custom_labels$source_type) +
+    ggtitle("Main Trial Intercept") +
+    theme(aspect.ratio = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    xlab("Block Quarter") +
+    scale_y_continuous(
+      limits = ylims_intercept_without_ic,
+      name = "Intercept (Data)")
+
+pl_slope_over_time_data_with_ic
+pl_intercept_over_time_data_with_ic
+
+
+pl_accuracy_over_time_data_with_ic <- df_main_task %>% 
+  filter(
+    block_stage != "station_only",
+    condition == "Without",
+    plugin_type == "initial_source") %>% 
+  group_by(block_quarter, source_type) %>% 
+  summarise(mean_accuracy = mean(accuracy),
+            sem_accuracy = std.error(accuracy)) %>% 
+  ggplot(aes(block_quarter, mean_accuracy, color = source_type)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_accuracy + sem_accuracy,
+                      ymax = mean_accuracy - sem_accuracy),
+                  width = .2, position = position_dodge(width = .2)) +
+    ggtitle("Average Accuracy") +
+      scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    theme(aspect.ratio = 1) + 
+    guides(color = "none") +
+    xlab("Block Quarter")
+    scale_y_continuous(
+      name = "Accuracy (Data)", limits = ylims_accuracy_with_ic,
+      breaks = ybreaks_accuracy_with_ic
+    )
+
+pl_accuracy_over_time_data_with_ic
+```
+
+
+
+```{r}
+m_accuracy_regression_with_ic <- glm(
+  data = df_main_task %>% 
+    filter(with_independent_council == "true") %>% 
+    filter(block_stage != "station_only") %>% 
+    select(completion_code, num_blue_news, source_type, accuracy, trial_number_within_block),
+  formula = accuracy ~ trial_number_within_block * source_type,
+  family = binomial)
+# summary(m_accuracy_regression_without_ic)
+anova(m_accuracy_regression_with_ic ,test='Chisq')
+```
+
+```{r}
+pl_slope_over_time_model_with_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == TRUE) %>% 
+  ggplot(aes(block_quarter, slope_model, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_errorbar(aes(ymin = slope_model + slope_sem_model,
+                    ymax = slope_model - slope_sem_model),
+                width = .2, position = position_dodge(width = .2)) +
+      scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    # ggtitle("Main trial slope") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    theme(aspect.ratio = 1) +
+    xlab("Block Quarter") + ylab("Slope (Model)") +
+    scale_y_continuous(limits = ylims_slope_without_ic)
+
+pl_intercept_over_time_model_with_ic <- df_beta_over_time_pooled_model_and_data %>% 
+  filter(news_station_first == "First",
+         with_independent_council == TRUE) %>% 
+  ggplot(aes(block_quarter, intercept_model, colour = source_type)) +
+    geom_line(position = position_dodge(width = .2)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+      geom_errorbar(aes(ymin = intercept_model + intercept_sem_model,
+                      ymax = intercept_model - intercept_sem_model),
+                  width = .2, position = position_dodge(width = .2)) +
+      scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation",
+                       labels = custom_labels$source_type) +
+    # ggtitle("Main trial intercept") +
+    theme(aspect.ratio = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3)+
+    xlab("Block Quarter") + ylab("Intercept (Model)") +
+    scale_y_continuous(limits = ylims_intercept_without_ic) 
+
+pl_slope_over_time_model_with_ic
+pl_intercept_over_time_model_with_ic
+```
+
+```{r}
+df_model_predictions_with_ic %<>%
+  mutate(accuracy = a_I == ground_truth)
+
+pl_accuracy_over_time_model_with_ic <- df_model_predictions_with_ic %>% 
+  filter(
+    block_stage != "station_only") %>% 
+  group_by(block_quarter, source_type) %>% 
+  summarise(mean_accuracy = mean(accuracy),
+            sem_accuracy = std.error(accuracy)) %>% 
+  ggplot(aes(block_quarter, mean_accuracy, color = source_type)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_accuracy + sem_accuracy,
+                      ymax = mean_accuracy - sem_accuracy),
+                  width = .2, position = position_dodge(width = .2)) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    theme(aspect.ratio = 1) + 
+    guides(color = "none") + 
+    xlab(custom_labels$block_quarter) + ylab("Accuracy (Model)")+
+    scale_y_continuous(name = "Accuracy (Model)", limits = ylims_accuracy_with_ic,
+                       breaks = ybreaks_accuracy_with_ic)
+
+
+pl_accuracy_over_time_model_with_ic
+```
+
+```{r, fig.width=11, fig.height=7}
+pls_dynamics_pooled_with_ic <- pl_slope_over_time_data_with_ic + 
+  pl_intercept_over_time_data_with_ic +
+  pl_accuracy_over_time_data_with_ic + 
+  pl_slope_over_time_model_with_ic + 
+  pl_intercept_over_time_model_with_ic +
+  pl_accuracy_over_time_model_with_ic+ 
+  plot_layout(guides = 'collect') + 
+  plot_annotation(tag_levels = "A")
+pls_dynamics_pooled_with_ic
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_pooled_with_ic.pdf",
+  pls_dynamics_pooled_with_ic,
+  height = 7,
+  width = 11
+)
+```
+
+
+## Figure 6: Individual dynamics
+
+
+```{r}
+pl_slope_split_half_data_with_ic <- df_beta_over_time_all %>%
+  filter(condition == "Without") %>% 
+  mutate(block_half = as.factor(block_half)) %>% 
+  ggplot(aes(block_half, slope_data, colour = source_type)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_boxplot(colour = "black", alpha = 0.2, fill = 'black', outlier.alpha = 0) +
+    geom_point(alpha = .2) +
+    geom_line(aes(group = completion_code), alpha = .1) +
+    facet_grid(.~source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                   name = "News\nStation") + 
+    # ggtitle("Slope by Block Half", subtitle = "(Individual Participant Betas)") +
+    ylab("Slope (Data)") + xlab("Block Half") +
+    scale_y_continuous(limits = ylims_indiv_slope) + 
+      guides(color = "none") + 
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_blank()
+    )+
+  ggtitle("Confidence Slope")
+
+
+pl_intercept_split_half_data_with_ic <-  df_beta_over_time_all %>%
+  filter(condition == "Without") %>% 
+  mutate(block_half = as.factor(block_half)) %>% 
+  ggplot(aes(block_half, intercept_data, colour = source_type)) +
+geom_boxplot(colour = "black", alpha = 0.2, fill = 'black', outlier.alpha = 0) +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_point(alpha = .2) +
+    geom_line(aes(group = completion_code), alpha = .1) +
+    facet_grid(.~source_type) +
+    scale_color_manual(values = custom_colours$source_types,
+                   name = "News\nStation") + 
+    # ggtitle("Slope by Block Half", subtitle = "(Individual Participant Betas)") +
+  ylab("Intercept (Data)") + xlab("Block Half") +
+  plot_layout(guides="collect") +
+  scale_y_continuous(limits = c(-3.5,2),
+                     breaks = -3:2)+ 
+    guides(color = "none") +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )+
+  ggtitle("Confidence Intercept")
+
+pl_slope_split_half_data_with_ic + pl_intercept_split_half_data_with_ic + plot_layout(guides = "collect")
+```
+
+
+```{r}
+m_aov_slopes_with_ic <-  aov(
+    data = df_beta_over_time_all %>%
+      filter(condition == "Without"),
+    formula = slope_data ~ as.factor(block_half) * source_type
+  )
+
+summary(m_aov_slopes_with_ic)
+report(m_aov_slopes_with_ic)
+```
+
+
+```{r}
+TukeyHSD(m_aov_slopes_with_ic)
+```
+
+
+```{r}
+m_aov_intercept_with_ic <-  stats::aov(
+  data = df_beta_over_time_all %>%
+      filter(condition == "Without"),
+  formula = intercept_data ~ as.factor(block_half) * source_type
+)
+
+summary(m_aov_intercept_with_ic)
+report(m_aov_intercept_with_ic)
+
+TukeyHSD(m_aov_intercept_with_ic)
+```
+
+
+```{r}
+pl_diff_slope_data_with_ic <- df_diff_beta_over_time %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(source_type, diff_slope_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    geom_hline(yintercept = 0) # + 
+    # facet_grid(.~source_type) +
+    # ggtitle("D(slopes) 1st to 2nd half")
+pl_diff_slope_data_with_ic
+
+pl_diff_intercept_data_with_ic <- df_diff_beta_over_time %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(source_type, diff_intercept_data, 
+             colour = source_type, fill = source_type)) + 
+    geom_jitter(alpha = .2, size = 2, colour = "black",width = .3) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    geom_hline(yintercept = 0) # + 
+    # facet_grid(.~source_type) +
+    # ggtitle("D(slopes) 1st to 2nd half")
+pl_diff_intercept_data_with_ic
+```
+
+
+```{r}
+pl_slope_corr_with_ic <- df_beta_over_time_all %>%
+  filter(condition == "Without") %>% 
+  ggplot(aes(slope_data, slope_model)) +
+  # stat_cor() +
+  # geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed")
+    geom_point(
+      aes(color = source_type, shape = as.factor(block_half)),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation",
+      labels = custom_labels$source_type
+      ) +
+     geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + guides(color = "none") +
+    coord_fixed() +
+    scale_shape_manual(values = c(16,1), name  = "Block Half") +
+    scale_x_continuous(
+      name = "Slope (Data)",
+      breaks = c(-2,0,2,4)
+    ) +
+    scale_y_continuous(
+      name = "Slope (Model)",
+      breaks = c(-2,0,2,4)
+    )
+pl_slope_corr_with_ic
+
+pl_intercept_corr_with_ic <-df_beta_over_time_all %>%
+  filter(condition == "Without") %>% 
+  ggplot(aes(intercept_data, intercept_model)) +
+  # stat_cor() +
+  # geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed")
+    geom_point(
+      aes(color = source_type, shape = as.factor(block_half)),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation",
+      labels = custom_labels$source_type
+      ) +
+    scale_shape_manual(values = c(16,1), name  = "Block Half") +
+    geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + # guides(color = "none") +
+    coord_fixed(ratio = 1, clip = "off") +
+    scale_x_continuous(
+      name = "Intercept (Data)"
+    ) +
+    scale_y_continuous(
+      name = "Intercept (Model)"
+    )
+pl_intercept_corr_with_ic
+```
+
+```{r}
+cor.test(
+  (df_beta_over_time_all %>%  filter(condition == "Without"))$slope_data,
+  (df_beta_over_time_all %>%  filter(condition == "Without"))$slope_model
+)
+```
+
+
+```{r}
+cor.test(
+  (df_beta_over_time_all %>%  filter(condition == "Without"))$intercept_data,
+  (df_beta_over_time_all %>%  filter(condition == "Without"))$intercept_model
+)
+```
+
+
+```{r, fig.width=11, fig.height=7.4}
+pls_dynamics_indiv_with_ic <- (pl_slope_split_half_data_with_ic |
+  pl_intercept_split_half_data_with_ic | 
+  pl_diff_slope_data_with_ic | 
+  pl_diff_intercept_data_with_ic) /
+  (pl_slope_corr_with_ic | pl_intercept_corr_with_ic) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+
+pls_dynamics_indiv_with_ic
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_indiv_with_ic.pdf", 
+  pls_dynamics_indiv_with_ic,
+  width = 11,
+  height = 7.4
+  )
+```
+
+
+
+
+```{r, fig.width=11, fig.height=7.4}
+pls_dynamics_indiv_with_ic_small <- (pl_slope_split_half_data_with_ic |
+  pl_intercept_split_half_data_with_ic ) /
+  (pl_slope_corr_with_ic | pl_intercept_corr_with_ic) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+
+pls_dynamics_indiv_with_ic_small
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_dynamics_indiv_with_ic_small.pdf",
+  pls_dynamics_indiv_with_ic_small,
+  width = 11,
+  height = 7.4
+)
+```
+
+
+
+## Model and data
+
+#### Evolution of the belief state
+
+```{r}
+df_mean_belief_state_with_ic <- df_model_predictions_with_ic %>% 
+  filter(block_stage != "station_only") %>% 
+  mutate(mean_belief_state = (b_F_estimate + g_F_estimate) / 2) %>% 
+  group_by(
+    trial_number_within_block,
+    source_type
+  ) %>% 
+  summarize(
+    average_mean_belief_state = mean(mean_belief_state),
+    average_b_F = mean(b_F_estimate),
+    average_g_F = mean(g_F_estimate)
+  )
+
+df_mean_belief_state_with_ic
+```
+
+We get a mean over these
+
+
+```{r}
+pl_mean_belief_state_with_ic <- df_model_predictions_with_ic %>% 
+  filter(block_stage != "station_only") %>% 
+  mutate(mean_belief_state = (b_F_estimate + g_F_estimate) / 2) %>% 
+  ggplot(aes(trial_number_within_block, mean_belief_state)) +
+    geom_line(
+      aes(colour = source_type, group = completion_code), 
+      alpha = custom_plot_settings$alpha_belief_state,
+      size = 1) + 
+    facet_grid(.~source_type) +
+    guides(colour = "none") +
+    geom_line(
+        data = df_mean_belief_state_with_ic, 
+        aes(trial_number_within_block, average_mean_belief_state), 
+        size = 1,
+        alpha = .7) +
+    geom_hline(yintercept = .5, linetype = "dashed") +
+    scale_y_continuous(limits = c(0,1)) +
+    xlab("Trial number within block") +
+    ylab("Mean belief state") +
+    scale_color_manual(values = custom_colours$source_types) + 
+    theme(
+      strip.background = element_rect(colour="white",fill="white"),
+      strip.text = element_text(face = 'bold')
+    ) +
+    ggtitle("Model Belief States")
+
+pl_mean_belief_state_with_ic
+```
+
+
+
+
+```{r}
+df_ML_fit_parameters_with_ic %<>% 
+  mutate(prior_mean = (beta_b_mean + beta_g_mean) / 2)
+df_ML_fit_parameters_with_ic
+
+```
+
+```{r, fig.width=8, fig.height=4.5}
+pl_prior_distribution_with_ic  <-df_ML_fit_parameters_with_ic %>% 
+  ggplot(aes(prior_mean)) +
+    geom_histogram(fill = "royalblue", colour = "black") +
+    scale_x_continuous(limits = c(0,1), name = "Prior Mean") +
+    theme(aspect.ratio = .6) +
+    scale_y_continuous(name = "Count") +
+    ggtitle("Fit prior")
+# pl_prior_distribution_with_ic
+
+pls_belief_parameter_with_ic <- (pl_mean_belief_state_with_ic | (pl_prior_distribution_with_ic)) + 
+  plot_layout(widths = c(1.8,1)) + 
+  plot_annotation(tag_levels = "A")
+
+pls_belief_parameter_with_ic
+```
+
+
+```{r}
+ggsave(
+  filename = "plots/plos_cb/fig_belief_parameters_with_ic.pdf",
+  pls_belief_parameter_with_ic,
+  width = 8, height = 4.5)
+```
+
+
+
+
+```{r, fig.width=10, fig.height=11}
+pls_indiv_model_with_ic <- (pl_slope_split_half_data_with_ic |
+  pl_intercept_split_half_data_with_ic ) /
+  (pl_slope_corr_with_ic | pl_intercept_corr_with_ic) /
+  ((pl_mean_belief_state_with_ic | (pl_prior_distribution_with_ic )) +
+  plot_layout(widths = c(1.8,1))) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+pls_indiv_model_with_ic
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_indiv_model_with_ic.pdf",
+  pls_indiv_model_with_ic,
+  width = 10, height = 11
+)
+```
+
+
+```{r}
+mean(df_ML_fit_parameters_with_ic$prior_mean)
+sd(df_ML_fit_parameters_with_ic$prior_mean)
+```
+
+
+```{r}
+df_beta_over_time_all %>%
+  filter(condition == "Without",
+         block_half == 1) %>% 
+  ggplot(aes(slope_data, first_half_belief_state)) +
+  stat_cor() +
+  # geom_abline(alpha = alpha_level_for_0_point,linetype = "dashed")
+    geom_point(
+      aes(color = source_type, shape = as.factor(block_half)),
+      size =  point_size_data_prediction_dynamics,
+      alpha = .9) +
+    scale_colour_manual(
+      values = custom_colours$source_types,
+      name = "News\nStation"
+      ) +
+     geom_smooth(method = "lm", alpha = .5, colour = "black") +
+    theme(aspect.ratio = 1) + guides(color = "none") +
+    coord_fixed() +
+    scale_shape_manual(values = c(16,1), name  = "Block Half") +
+    ylab("Model") + xlab("Data") 
+```
+
+
+
+# Comparision figure
+
+```{r}
+custom_colours$feedback_condition <- rev(met.brewer("Hokusai3",2))
+```
+
+
+```{r}
+df_optimal_model_predictions_with_ic$condition <- "Without"
+df_optimal_model_predictions_without_ic$condition <- "With"
+
+df_optimal_model_predictions <- bind_rows(
+  df_optimal_model_predictions_with_ic,
+  df_optimal_model_predictions_without_ic
+)
+
+df_optimal_model_predictions %<>% 
+  mutate(with_independent_council = condition == "Without")
+```
+
+We do additional analysis, taking into account the optimal model
+
+
+```{r}
+df_accuracy_comparisions <- bind_rows(
+  
+  df_optimal_model_predictions %>% 
+    filter(block_stage != "station_only") %>% 
+    mutate(accuracy = a_I == ground_truth) %>% 
+    group_by(block_quarter, condition) %>% 
+    summarise(mean_accuracy = mean(accuracy),
+              sem_accuracy = std.error(accuracy)) %>% 
+    mutate(data = FALSE),
+  
+  df_main_task %>% 
+    filter(
+      block_stage != "station_only",
+      plugin_type == "initial_source"
+      ) %>% 
+    group_by(block_quarter, condition) %>% 
+    summarise(mean_accuracy = mean(accuracy),
+              sem_accuracy = std.error(accuracy)) %>% 
+    mutate(data = TRUE)
+)
+
+df_accuracy_comparisions
+```
+
+```{r}
+pl_accuracy_comparison_optimal <- df_accuracy_comparisions %>% 
+  ggplot(aes(block_quarter, mean_accuracy, color = condition, linetype = data)) +
+    geom_point(position = position_dodge(width = .2), size = point_size_data_prediction_dynamics) +
+    geom_line(aes(), alpha = 5, position = position_dodge(width = .2)) +
+    geom_errorbar(aes(ymin = mean_accuracy + sem_accuracy,
+                      ymax = mean_accuracy - sem_accuracy),
+                  width = .2, position = position_dodge(width = .2)) +
+    ggtitle("Average Accuracy") +
+    scale_color_manual(
+      values = custom_colours$feedback_condition,
+      name = "Feedback", labels = c("Full", "Noisy")) + 
+    # theme(aspect.ratio = 1) +
+    scale_linetype_manual(
+      values = c(2,1),
+      name = "Data",
+      labels = c("Optimal Model", "Empirical")) +
+    scale_y_continuous(
+      name = "Accuracy",
+      breaks = c(.6,.7,.8)) +
+    xlab("Block Quarter")
+pl_accuracy_comparison_optimal
+```
+
+
+
+```{r}
+m_accuracy_regression_condition_comparison <- glm(
+  data = df_main_task %>% 
+    filter(block_stage != "station_only") %>% 
+    select(completion_code, with_independent_council, num_blue_news, source_type, accuracy, trial_number_within_block),
+  formula = accuracy ~ trial_number_within_block * with_independent_council ,
+  family = binomial)
+# summary(m_accuracy_regression_without_ic)
+anova(m_accuracy_regression_condition_comparison ,test='Chisq')
+```
+
+
+```{r}
+m_accuracy_regression_condition_comparison <- glm(
+  data = df_main_task %>% 
+    filter(block_stage != "station_only") %>% 
+    select(completion_code, with_independent_council, num_blue_news, source_type, accuracy, trial_number_within_block),
+  formula = accuracy ~ trial_number_within_block * with_independent_council ,
+  family = binomial)
+# summary(m_accuracy_regression_without_ic)
+anova(m_accuracy_regression_condition_comparison ,test='Chisq')
+```
+
+```{r}
+df_compare_accuracy_trial_by_trial <- bind_rows(
+  df_main_task %>%
+    filter(block_stage != "station_only") %>% 
+    select(trial_number_within_block, accuracy, with_independent_council) %>% 
+    mutate(data = TRUE),
+  
+  df_optimal_model_predictions %>% 
+    filter(block_stage != "station_only") %>% 
+    mutate(accuracy = as.numeric(a_I == ground_truth)) %>% 
+    select(trial_number_within_block, accuracy, with_independent_council) %>% 
+    mutate(data = FALSE)
+)
+
+df_compare_accuracy_trial_by_trial
+
+m_accuracy_regression_condition_comparison_with_optimal <- glm(
+  data = df_compare_accuracy_trial_by_trial,
+  formula = accuracy ~ trial_number_within_block *  data,
+  family = binomial)
+
+print(anova(m_accuracy_regression_condition_comparison_with_optimal ,test='Chisq'))
+```
+
+
+
+```{r}
+pls_compare_probe_trial_slopes <- df_regression_betas %>% 
+  ggplot(aes(source_type, slope_source_only_data, 
+             colour = condition, fill = condition)) + 
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+  
+    geom_point(alpha = .2, 
+               size = 2,
+               width = .3, 
+               size = point_size_data_prediction_dynamics, 
+               position = position_jitterdodge(jitter.width = .2,dodge.width = 1)) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$feedback_condition,
+                        name = "Feedback") +
+    scale_color_manual(values = custom_colours$feedback_condition,
+                      name = "Feedback") +
+    ggtitle("Probe trial slopes")+
+    theme(aspect.ratio = .75) 
+pls_compare_probe_trial_slopes
+```
+
+```{r}
+m_aov_compare_slopes_by_condition <- aov(
+  formula = slope_source_only_data ~ source_type * condition,
+  data = df_regression_betas
+)
+
+summary(m_aov_compare_slopes_by_condition)
+
+TukeyHSD(m_aov_compare_slopes_by_condition)
+```
+
+
+```{r, fig.width=9, fig.height=4.5}
+pls_condition_comparison <- pl_compare_dynamic_accuray + pls_compare_probe_trial_slopes + 
+  plot_layout(guides = "collect") + 
+  plot_annotation(tag_levels = "A") 
+pls_condition_comparison  
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_condition_comparision.pdf",
+  pls_condition_comparison,
+  width = 8,
+  height = 4
+  )
+```
+
+
+### Optimal slopes
+
+```{r, warning=FALSE}
+df_optimal_model_slopes_with_ic <- get_regression_betas(
+    df_main_task_wide = df_optimal_model_predictions_with_ic,
+    only_look_at_second_half = TRUE
+  )
+
+df_optimal_model_slopes_without_ic <- get_regression_betas(
+    df_main_task_wide = df_optimal_model_predictions_without_ic,
+    only_look_at_second_half = TRUE
+  )
+
+df_optimal_model_slopes_with_ic$condition <- "Without" # note how the condition demarkates the feedback 
+df_optimal_model_slopes_without_ic$condition <- "With" 
+
+df_optimal_model_slopes <- bind_rows(
+  df_optimal_model_slopes_without_ic,
+  df_optimal_model_slopes_with_ic
+)
+```
+
+
+```{r, warning=FALSE}
+df_slopes_comparision <- bind_rows(
+  df_regression_betas %>% 
+    mutate(data = TRUE,
+           slope_source_only = slope_source_only_data),
+  df_optimal_model_slopes %>% 
+    mutate(data = FALSE)
+)
+```
+
+
+
+
+```{r}
+df_slopes_comparision %>% 
+  ggplot(aes(source_type, slope_source_only, 
+             colour = condition, fill = condition)) + 
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+  
+    geom_point(alpha = .2, 
+               size = 2,
+               width = .3, 
+               size = point_size_data_prediction_dynamics, 
+               position = position_jitterdodge(jitter.width = .2,dodge.width = 1)) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$feedback_condition,
+                        name = "Feedback") +
+    scale_color_manual(values = custom_colours$feedback_condition,
+                      name = "Feedback") +
+    ggtitle("Probe trial slopes")+
+    # theme(aspect.ratio = .75) +
+    facet_grid(. ~ data)
+```
+
+
+```{r}
+df_optimal_slopes_mean <- df_slopes_comparision %>% 
+  filter(data == FALSE) %>% 
+  group_by(condition, source_type) %>% 
+  summarise(mean_slope = mean(slope_source_only)) 
+df_optimal_slopes_mean
+```
+
+
+```{r}
+pl_slope_comparison <- df_slopes_comparision %>% 
+  filter(data == TRUE) %>% 
+  ggplot(aes(source_type, slope_source_only, 
+             colour = condition, fill = condition)) + 
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .8)+  
+    geom_point(alpha = .2, 
+               size = 2,
+               width = .3, 
+               size = point_size_data_prediction_dynamics, 
+               position = position_jitterdodge(jitter.width = .2,dodge.width = .9)) +
+    geom_violin(alpha = .5,
+                draw_quantiles = c(0.5)) +
+    scale_fill_manual(values = custom_colours$feedback_condition,
+                        name = "Feedback",
+                      labels = c("Full", "Noisy")) +
+    scale_color_manual(values = custom_colours$feedback_condition,
+                      name = "Feedback",
+                      labels = c("Full", "Noisy")) +
+    ggtitle("Probe Trial Slopes") +
+    scale_y_continuous(
+      breaks = -1:1,
+      name = "Slope"
+    ) +
+    scale_x_discrete(
+      name = "News Station",
+      labels = custom_labels$source_type
+    ) +
+    geom_point(
+      data = df_optimal_slopes_mean, 
+      aes(source_type, mean_slope),
+      position = position_jitterdodge(dodge.width = .9, jitter.height = 0, jitter.width = 0),
+      shape = 23, colour = "black", size = 4,stroke = 1,
+      size = 3
+      )
+
+pl_slope_comparison
+```
+
+```{r, fig.width=10, fig.height=4.5}
+pls_condition_comparison_optimal <- (pl_accuracy_comparison_optimal) +
+  pl_slope_comparison + 
+    guides(fill = "none", color = "none") + 
+    annotate("text", 
+             x = 4.2, 
+             y = -.85,
+             label = "Optimal\nModel",
+             size = 4.5) +
+  # geom_segment(x = 3.9, y = -.92,
+  #              xend = 3.6, yend = -.92,
+  #              arrow = arrow(type = "closed")) +
+  plot_layout(
+    guides = "collect", 
+    widths = c(1,1.5)) + 
+  plot_annotation(tag_levels = "A") 
+pls_condition_comparison_optimal  
+```
+
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_condition_comparision_optimal.pdf",
+  pls_condition_comparison_optimal,
+  width = 10,
+  height = 4.5
+)
+```
+
+
+
+# Questionnaire analyses
+
+```{r}
+source_abbreviations <- list(
+  "helpful" = "h",
+  "random" = "r",
+  "opposite" = "o",
+  "bluebias" = "b"
+)
+
+source_abbreviater <- function(variable, value){
+  return(source_abbreviations[value])
+}
+
+pl_trust_improvement <- df_post_block_trust_improvement %>%  
+  ggplot(aes(x = question, color = source_type, y = as.numeric(response), fill = source_type)) +
+    geom_boxplot(aes(alpha = question), size = 1) +
+    facet_grid(.~source_type,labeller=source_abbreviater) +
+    geom_point(alpha = .1, colour = "black") +
+    geom_line(aes(group = completion_code), alpha = .1,colour = "black") +
+    # ggtitle("Improvement, trust questionnaires") +
+    geom_hline(yintercept = c(0)) +
+    theme(
+      strip.text = element_blank()
+      # aspect.ratio = 4
+      ) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_fill_manual(values = custom_colours$source_types,
+                         name = "News\nStation") +
+    scale_alpha_manual(values = c(.3, .7)) +
+    guides(alpha = "none", colour = "none", fill = "none") +
+    scale_y_continuous(name = 'Response', breaks = c(0,50,100), labels = c(0,50,100)) +
+    scale_x_discrete(name = 'Question Type', labels = c("I", "T")) 
+
+pl_trust_improvement
+```
+
+```{r}
+aov_trust_improve <- aov(
+  formula = as.numeric(response) ~ source_type * question,
+  data = df_post_block_trust_improvement
+)
+
+summary(aov_trust_improve)
+
+TukeyHSD(aov_trust_improve)
+```
+
+
+
+```{r}
+df_post_block_trust_improvement
+df_regression_betas
+```
+
+```{r}
+df_trust_improve_betas <- left_join(
+  df_post_block_trust_improvement, 
+  df_regression_betas,
+  by = c("completion_code", "source_type", "condition")
+  )
+
+df_trust_improve_betas %<>%
+  # select(-X.x, -X.y) %>% 
+  mutate(mark_opposite = ifelse(source_type == "opposite", TRUE, FALSE))
+
+df_trust_improve_betas
+```
+
+```{r}
+pl_trust_slope <- df_trust_improve_betas %>%
+  filter(question == "trust") %>% 
+  ggplot(aes(response,slope_initial_confidence_data)) +
+    geom_point(aes(colour = source_type)) +
+    theme(aspect.ratio = 1)+
+    scale_color_manual(values = custom_colours$source_types) +
+    geom_smooth(aes(fill = mark_opposite),
+                method = "lm", 
+                formula = y ~  +x, 
+                colour = "black",alpha = .5) + 
+    scale_fill_manual(values = c("grey", custom_colours$source_types[3])) +
+    xlab("Trust")+ ylab("Slope") +
+    guides(fill = "none", color = "none") +
+    scale_y_continuous(breaks = c(-3,0,3))+
+    scale_x_continuous(breaks = c(0,50,100))
+pl_trust_slope 
+
+pl_improve_slope <- df_trust_improve_betas %>%
+  filter(question == "improve") %>% 
+  ggplot(aes(response,slope_initial_confidence_data)) +
+    geom_point(aes(colour = source_type)) +
+    theme(aspect.ratio = 1)+
+    scale_color_manual(
+      values = c(custom_colours$source_types),
+      name = "News\nStation",
+      labels = custom_labels$source_type) +
+    geom_smooth(aes(fill = mark_opposite),
+                method = "lm", 
+                formula = y ~  I(x^2) +x, 
+                colour = "black",alpha = .5) + 
+    scale_fill_manual(
+      values = c("grey", custom_colours$source_types[3])) +
+    xlab("Improve")+ ylab("Slope") +
+    guides(fill = "none")+
+    scale_y_continuous(breaks = c(-3,0,3))+
+    scale_x_continuous(breaks = c(0,50,100)) +
+    theme(axis.title.y = element_blank())
+pl_improve_slope
+
+pl_trust_slope + pl_improve_slope
+```
+
+```{r}
+compare_quadratic_fits <- function(iv, dv){
+  m_linear <- lm(iv ~ dv)
+  m_square <- lm(iv ~ I(dv^2))
+  m_squali <- lm(iv ~ I(dv^2) + dv)
+  
+  print(paste("BIC(linear):", BIC(m_linear)))
+  print(paste("BIC(squared):", BIC(m_square)))
+  print(paste("BIC(squared/linear):", BIC(m_squali)))
+  
+  list_of_models <- list(
+    linear = m_linear,
+    quad = m_square,
+    linquad = m_squali
+  )
+  
+  return(list_of_models)
+}
+```
+
+```{r}
+print("Trust without Opposite")
+
+ms_trust_without_opposite <- compare_quadratic_fits(
+  (df_trust_improve_betas %>%
+    filter(question == "trust", mark_opposite == FALSE))$slope_initial_confidence_data,
+  (df_trust_improve_betas %>%
+    filter(question == "trust", mark_opposite == FALSE))$response
+)
+
+print("Trust with Opposite")
+
+ms_trust_with_opposite <- compare_quadratic_fits(
+  (df_trust_improve_betas %>%
+    filter(question == "trust", mark_opposite == TRUE))$slope_initial_confidence_data,
+  (df_trust_improve_betas %>%
+    filter(question == "trust", mark_opposite == TRUE))$response
+)
+
+print("Improve without Opposite")
+
+ms_improve_without_opposite <- compare_quadratic_fits(
+  (df_trust_improve_betas %>%
+    filter(question == "improve", mark_opposite == FALSE))$slope_initial_confidence_data,
+  (df_trust_improve_betas %>%
+    filter(question == "improve", mark_opposite == FALSE))$response
+)
+
+
+
+print("Improve with Opposite")
+
+ms_improve_with_opposite <- compare_quadratic_fits(
+  (df_trust_improve_betas %>%
+    filter(question == "improve", mark_opposite == TRUE))$slope_initial_confidence_data,
+  (df_trust_improve_betas %>%
+    filter(question == "improve", mark_opposite == TRUE))$response
+)
+
+```
+
+```{r}
+trust_improve_table <- list(
+  "Trust without Opposite" = list(
+    models = ms_trust_without_opposite,
+    dv = "Trust",
+    sources = "All but opposite"
+  ),
+  "Trust with Opposite" = list(
+    models = ms_trust_with_opposite,
+    dv = "Trust",
+    sources = "Opposite"
+  ),
+  "Improve without Opposite" = list(
+    models = ms_improve_without_opposite,
+    dv = "Improve",
+    sources = "All but opposite"
+  ),
+  "Improve with Opposite" = list(
+    models = ms_improve_with_opposite,
+    dv = "Improve",
+    sources = "Opposite"
+  )
+)
+
+for (analysis in names(trust_improve_table)) {
+  
+  
+}
+```
+
+
+```{r}
+df_trust_improve_bics <- data.frame(
+  "Analysis" = factor(),
+  "DV" = factor(),
+  "News Sources" = factor(), 
+  "Model" = factor(),
+  "BIC" = double()
+)
+
+model_names_for_BIC_comparision = list(
+  "linear" = "Linear",
+  "quad" = "Quadratic",
+  "linquad" = "Linear and quadratic"
+)
+
+df_trust_improve_bics
+
+for (analysis in names(trust_improve_table)) {
+  
+  for (model_name in names(trust_improve_table[[analysis]]$models)) {
+    
+    df_trust_improve_bics <- bind_rows(
+      df_trust_improve_bics,
+      data.frame(
+        "Analysis" = analysis,
+        "DV" = trust_improve_table[[analysis]]$dv,
+        "News Sources" = trust_improve_table[[analysis]]$sources, 
+        "Model" = model_names_for_BIC_comparision[[model_name]],
+        "BIC" = BIC(trust_improve_table[[analysis]]$models[[model_name]])
+      )
+    )
+    
+  }
+  
+}
+
+df_trust_improve_bics 
+```
+
+
+```{r}
+latex_table <- df_trust_improve_bics %>% 
+  select(-Analysis) %>% 
+  kbl(format = 'latex') %>% 
+  row_spec(0, bold = TRUE)
+
+latex_table
+```
+
+
+```{r}
+summary(ms_trust_without_opposite$linear)
+summary(ms_trust_with_opposite$linear)
+summary(ms_improve_without_opposite$linear)
+summary(ms_improve_with_opposite$linquad)
+```
+
+
+```{r, fig.width = 12, fig.height= 3.4}
+pls_post_block <- pl_trust_improvement + pl_trust_slope + pl_improve_slope +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+pls_post_block
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_post_block.pdf", 
+  pls_post_block,
+  height = 3.4,
+  width = 12
+  )
+```
+
+# Supplementary analysis
+
+## Demograhpics
+
+```{r}
+demographics <- list(
+  With = list(),
+  Without = list()
+)
+
+demographics$With$age_mean <- mean(filter(df_participant_summary, condition == "With")$age)
+demographics$Without$age_mean <- mean(filter(df_participant_summary, condition == "Without")$age)
+demographics$With$age_sd <- sd(filter(df_participant_summary, condition == "With")$age)
+demographics$Without$age_sd <- sd(filter(df_participant_summary, condition == "Without")$age)
+
+demographics$With$gender <- filter(df_participant_summary, condition == "With") %>% count(gender)
+demographics$Without$gender <- filter(df_participant_summary, condition == "Without") %>% count(gender)
+
+demographics$With$gender
+```
+
+```{r}
+print_demographic_summary <- function(experiment_number, condition_to_print){
+  paste0(
+    "In experiment ", experiment_number, ", we analyzed a total of ",
+    nrow(filter(df_participant_summary, condition == condition_to_print)),
+    " participants. (",
+    demographics[[condition_to_print]]$gender$n[1],
+    " female, ",
+    demographics[[condition_to_print]]$gender$n[2],
+    " male, ",
+    demographics[[condition_to_print]]$gender$n[3],
+    " other/would rather not say). The mean age of participants was ",
+    round(demographics[[condition_to_print]]$age_mean,2),
+    " years (SD = ",
+    round(demographics[[condition_to_print]]$age_sd,2),
+    ")."
+  )
+}
+
+print_demographic_summary(1, "With")
+print_demographic_summary(2, "Without")
+```
+
+
+```{r}
+unique(df_participant_summary$education)
+
+education_factor_order <- c("NoHighSchool","HighSchool", "SomeCollege", "Bachelor", "Master", "PhD")
+```
+
+
+```{r, fig.width=10, fig.height=7}
+education_labels <- c("No High School", "High School", "Some College", "Bachelor", "Master", "PhD")
+
+pl_demographics <- 
+
+df_participant_summary %>%
+  filter(condition == "With") %>% 
+  count(gender) %>% 
+  ggplot(aes(gender, n)) + 
+    geom_col(position = "dodge", fill = 'royalblue') +
+    ggtitle("Gender")  +
+    theme(aspect.ratio = 1) +
+    scale_x_discrete(name = "Gender", labels = c("Female", "Male", "Other")) +
+  
+df_participant_summary %>% 
+  filter(condition == "With") %>% 
+  ggplot(aes(age)) +
+    geom_histogram(fill = "darkorange") +
+    ggtitle("Age")  +
+    theme(aspect.ratio = 1) +
+    xlim(18,75) +
+    ylab("n") + xlab("Age") +
+
+df_participant_summary %>% 
+  filter(condition == "With") %>% 
+  filter(education %in% education_factor_order) %>% 
+  mutate(education = factor(education, education_factor_order)) %>% 
+  count(education, .drop = FALSE)  %>% 
+  ggplot(aes(x = education, y = n)) +
+    geom_col() +
+    ggtitle("Eduction") +
+    theme(aspect.ratio = .7) +
+    scale_x_discrete(
+      name = "Education",
+      labels = education_labels
+    ) +
+    theme(axis.text.x = element_text(angle = 30, hjust=1)) + 
+  
+df_participant_summary %>%
+  filter(condition == "Without") %>% 
+  count(gender) %>% 
+  ggplot(aes(gender, n)) + 
+    geom_col(position = "dodge", fill = 'royalblue') +
+    theme(aspect.ratio = 1) + 
+    scale_x_discrete(name = "Gender", labels = c("Female", "Male", "Other")) +
+  
+  
+df_participant_summary %>% 
+  filter(condition == "Without") %>% 
+  ggplot(aes(age)) +
+    geom_histogram(fill = "darkorange") +
+    theme(aspect.ratio = 1) +
+    xlim(18,75) +
+    ylab("n") + xlab("Age") +
+
+df_participant_summary %>% 
+  filter(condition == "Without") %>% 
+  filter(education %in% education_factor_order) %>% 
+  count(education)  %>% 
+  mutate(education = factor(education, education_factor_order)) %>% 
+  ggplot(aes(x = education, y = n)) +
+    geom_col() +
+    theme(aspect.ratio = .7) +
+    theme(axis.text.x = element_text(angle = 30, hjust=1)) +
+    scale_x_discrete(
+      name = "Education",
+      labels = education_labels
+    ) +
+  
+plot_annotation(tag_levels = "A")
+
+
+    
+pl_demographics
+```
+
+
+```{r}
+ggsave(
+  filename = "plots/plos_cb/fig_demographics.pdf",
+  pl_demographics,
+  width = 9,
+  height = 7
+)
+```
+
+
+## Response to independent council
+
+
+```{r, fig.width=9, fig.height=4}
+df_main_task_wide %>% 
+  filter(
+    condition == "Without",
+    block_stage != "station_only"
+    ) %>% 
+  ggplot(aes(x = as.factor(X_I), y = change_of_mind, color = as.factor(source_type), group = X_I)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    geom_boxplot() +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    # scale_colour_viridis_d(direction = -1, name = "Num. blue in\nStation") +
+    scale_x_discrete(breaks = 0:5) +
+    facet_grid(.~source_type) +
+    # geom_point(alpha = .1, colour = "black") +
+    # geom_line(aes(group = completion_code), alpha = .1, colour = "black") +
+    ggtitle('Changes of mind to independent council (all trials)') + 
+    labs(x = "Blue in independent council", y = "Change of mind") +
+    guides(colour = "none") 
+```
+
+```{r, fig.width=9, fig.height=4}
+pl_changes_of_mind <- df_main_task_wide %>% 
+  filter(
+    condition == "Without",
+    block_stage != "station_only"
+    ) %>% 
+  group_by(
+    completion_code, source_type, X_I
+  ) %>% 
+  summarise(change_of_mind  = mean(change_of_mind)) %>% 
+  ggplot(aes(x = as.factor(X_I), y = change_of_mind, color = as.factor(source_type), group = X_I)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = .3) +
+    geom_boxplot(outlier.alpha = 0) +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News\nStation") +
+    scale_x_discrete(breaks = 0:5) +
+    facet_grid(.~source_type) +
+    geom_point(alpha = .1) +
+    geom_line(aes(group = completion_code), alpha = .1) +
+    ggtitle('Changes of mind in response to independent council',
+    subtitle = '(Per participant averages)') + 
+    labs(x = "Blue in independent council", y = "Change of mind") +
+    guides(colour = "none") +
+    theme(strip.background = element_blank())
+pl_changes_of_mind
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_changes of mind.pdf",
+  pl_changes_of_mind,
+  width = 9,
+  height = 4
+)
+```
+
+
+
+## Factor analysis
+
+```{r}
+df_participant_summary
+```
+
+
+```{r}
+features_for_dim_reduction <- c(
+  "completion_code",
+  "wvs", "trust_Press", "trust_Television", "trust_SocialMedia", "frequency_Cable", "frequency_NatTV", "frequency_LocalTV",
+  "frequency_Socialmedia", "frequency_Podcasts", "frequency_Blogs", "frequency_PublicRadio", "frequency_TalkRadio", "frequency_NewsSitesApps",
+  "frequency_PrintNewspapers", "ABC News", "Breitbart", "CBS News", "CNN", "Fox News", 
+  "MSNBC", "NBC News", "New York Times", "NPR", "Wall Street Journal", "Washington Post",
+  "USA Today", "Facebook", "Instagram", "Twitter", "WhatsApp", "Snapchat",
+  "TikTok", "YouTube", "Reddit", "LinkedIn"
+  )
+df_for_dim_reduction <- left_join(
+  
+  df_participant_summary %>% 
+    select(features_for_dim_reduction),
+  df_epist_trust %>% 
+    pivot_wider(
+      id_cols = "completion_code",
+      names_from = "question_index",
+      values_from = "response",
+      names_prefix = "ep_trust_" 
+    ),
+  by = "completion_code"
+)
+
+for (col in colnames(df_for_dim_reduction)[! colnames(df_for_dim_reduction) %in% "completion_code"]) {
+  df_for_dim_reduction[[col]] <- as.double(df_for_dim_reduction[[col]])
+}
+
+# remove the catch-question
+df_for_dim_reduction %<>%
+  select(-ep_trust_10) %>% 
+  mutate(wvs = -wvs)
+```
+
+All data
+
+```{r, fig.width=16}
+ggcorrplot(cor(select(df_for_dim_reduction, -completion_code),use = "complete.obs"))
+```
+
+```{r}
+CNG <- nCng(cor(scale(select(df_for_dim_reduction, -completion_code))), cor=TRUE, model="factors", details=TRUE)
+CNG$detail
+
+fa_Nfactors <- CNG $nFactors # save the number of factors
+fa_Nfactors # return it
+
+```
+
+
+```{r}
+n_factors_to_get <- 3
+fa_results <- fa(
+  r = scale(select(df_for_dim_reduction, -completion_code)), 
+  nfactors = n_factors_to_get,
+  rotate = 'oblimin',
+  fm="ml")
+fa_loadings <- fa_results$loadings
+
+df_loadings <- data.frame(f1 = fa_loadings[,1]) # and save this into a dataframe
+
+for (i in 2:n_factors_to_get) {
+  df_loadings[[paste0("f",i)]] <- fa_loadings[,i]
+}
+
+df_loadings$question <- rownames(df_loadings)
+df_loadings
+```
+
+```{r}
+ep_trust_colnames <- paste0("ep_trust_",seq(1,16))[c(1:9,11:16)]
+
+social_media_columns <- c("Facebook", "Instagram", "Twitter", "WhatsApp", "Snapchat", "TikTok", "YouTube", "Reddit", "LinkedIn")
+media_sources_columns <- c("ABC News", "Breitbart", "CBS News", "CNN", "Fox News", 
+  "MSNBC", "NBC News", "New York Times", "NPR", "Wall Street Journal", "Washington Post",
+  "USA Today", "Facebook", "Instagram", "Twitter", "WhatsApp", "Snapchat",
+  "TikTok", "YouTube", "Reddit", "LinkedIn")
+media_frequency_columns <- c("frequency_Cable", "frequency_NatTV", "frequency_LocalTV",
+  "frequency_Socialmedia", "frequency_Podcasts", "frequency_Blogs", "frequency_PublicRadio", "frequency_TalkRadio", "frequency_NewsSitesApps",
+  "frequency_PrintNewspapers")
+media_trust_columns <- c("trust_Press", "trust_Television", "trust_SocialMedia", "wvs")
+
+media_columns <- media_sources_columns[! media_sources_columns %in% social_media_columns]
+ep_trust_trust_colums <- paste0("ep_trust_",c(1,2,7,8,14))
+ep_trust_mistrust_columns <- paste0("ep_trust_",c(3,4,9,11,15))
+ep_trust_credulity_columns <- paste0("ep_trust_",c(5,6,12,13,16))
+
+
+questionnaire_mapping_list <-
+  list(
+    wvs = "wvs",
+    ep_trust_trust = ep_trust_trust_colums,
+    ep_trust_mistrust = ep_trust_mistrust_columns,
+    ep_trust_credulity = ep_trust_credulity_columns,
+    media_trust = media_trust_columns[!media_trust_columns %in% 'wvs'],
+    media_frequency = media_frequency_columns,
+    media_sources = media_columns,
+    social_media_sources = social_media_columns
+)
+
+df_loadings$question_group <- ""
+
+for (i in 1:nrow(df_loadings)) {
+  current_question <- df_loadings$question[i]
+  for (possible_group in names(questionnaire_mapping_list)) {
+    if(current_question %in% questionnaire_mapping_list[[possible_group]]){
+      df_loadings[i,]$question_group <- possible_group
+    }
+  }
+}
+
+df_loadings
+```
+
+
+
+```{r, fig.height=8, fig.width=9}
+labels_questions_pretty = c(
+  "WVS",
+  paste("Trust", 1:5),
+  paste("Mistrust", 1:5),
+  paste("Credulity", 1:5),
+  "Trust Press",
+  "Trust TV",
+  "Trust Social Media",
+  "Freq. Cable",
+  "Freq. Nat. TV",
+  "Freq. Local TV",
+  "Freq. Social Mdedia",
+  "Freq. Podcasts",
+  "Freq. Blogs",
+  "Freq. Public Radio",
+  "Freq. Talk Radio",
+  "Freq. News Apps",
+  "Freq. News Papers",
+  media_sources_columns
+)
+
+questionnaire_factor_order <- c(
+  "wvs", 
+  ep_trust_trust_colums, ep_trust_mistrust_columns, ep_trust_credulity_columns,
+  media_trust_columns[!media_trust_columns %in% 'wvs'],
+  media_frequency_columns,
+  media_columns,
+  social_media_columns
+  )
+
+questionnaire_group_order <- names(questionnaire_mapping_list)
+```
+
+
+```{r}
+length(questionnaire_factor_order)
+```
+
+
+```{r, fig.height=7.5, fig.width=6}
+pl_factor_loadings_vert <- df_loadings %>% 
+  pivot_longer(
+    cols = paste0("f",1:n_factors_to_get),names_to = "factor"
+  ) %>% 
+  mutate(
+    question = factor(question, rev(questionnaire_factor_order)),
+    question_group = factor(question_group, questionnaire_group_order)) %>%
+  ggplot(aes(question, value, fill = question_group)) +
+    geom_col(width = .85) +
+    facet_grid(.~factor,) + 
+    scale_fill_manual(values = met.brewer(name="Thomas",n = length(questionnaire_group_order))) +
+    # theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+    scale_x_discrete(labels = rev(labels_questions_pretty)) +
+    coord_flip() +
+    geom_hline(yintercept = 0, alpha = .5) +
+    guides(fill = "none") + 
+    theme(strip.text = element_blank(), 
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_text(size = 8),
+          axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size = 10)) 
+pl_factor_loadings_vert
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_factor_analysis.pdf",
+  pl_factor_loadings_vert, 
+  height = 7.5,
+  width = 6
+  )
+```
+
+```{r, fig.width=10, fig.height=10}
+(pl_slope_split_half_data_without_ic |
+  pl_intercept_split_half_data_without_ic ) /
+  (pl_slope_corr_without_ic | pl_intercept_corr_without_ic) /
+  ((pl_mean_belief_state_without_ic | (pl_prior_distribution_without_ic / pl_updating_distribution_without_ic)) +
+  plot_layout(widths = c(1.8,1))) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+```

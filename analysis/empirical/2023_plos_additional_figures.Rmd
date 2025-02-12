@@ -1,0 +1,285 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+# Set-up
+
+```{r}
+library(here)
+source(here("functions/load_all_functions_and_libraries.R"))
+```
+
+# Distribution of news sources
+
+```{r}
+base_prob <- .75
+
+game_attributes <- list(n_trials = 30,     # number of trials
+                        n_draws = 5,        # number of balls to be drawn
+                        b_I = base_prob,           # INITIAL DRAW
+                        g_I = base_prob,
+                        b_F_helpful = base_prob,   # FINAL (SOURCE) DRAW: 
+                        g_F_helpful = base_prob,
+                        b_F_random = .5,
+                        g_F_random = .5,
+                        b_F_opposite = 1 - base_prob,
+                        g_F_opposite = 1 - base_prob,
+                        b_F_greenbias = .5,
+                        g_F_greenbias = .9,
+                        b_F_bluebias = .9,
+                        g_F_bluebias = .5)
+```
+
+
+```{r}
+sources_to_run <- c("helpful", "random", "opposite", "bluebias")
+
+df_optimal_station_only <- data.frame(
+  n_blue = rep(0:game_attributes$n_draws, length(sources_to_run)),
+  source_type = rep(sources_to_run, each = game_attributes$n_draws + 1),
+  confidence = NA
+)
+
+for (current_source in sources_to_run) {
+  likelihood_green <- dbinom(x = 0:game_attributes$n_draws,
+                           size = game_attributes$n_draws,
+                           prob = 1 - game_attributes[[paste0("g_F_", current_source)]])
+  likelihood_blue <- dbinom(x = 0:game_attributes$n_draws,
+                             size = game_attributes$n_draws,
+                             prob = game_attributes[[paste0("b_F_", current_source)]])
+  posterior_confidence <- likelihood_blue/(likelihood_green + likelihood_blue)
+  
+  df_optimal_station_only[
+    df_optimal_station_only$source_type == current_source,
+    ]$confidence <- posterior_confidence
+}
+
+df_optimal_station_only$source_type <- 
+  factor(df_optimal_station_only$source_type,      
+    levels = c("helpful",
+               "random",
+               "opposite",
+               "bluebias",
+               "greenbias"))
+```
+
+
+```{r, fig.height=3.5, fig.width=5.5}
+point_size_data_prediction_dynamics <- 4
+
+pl_optimal_response <- df_optimal_station_only %>% 
+  ggplot(aes(n_blue, confidence, colour = source_type, group = source_type)) +
+    geom_point(size = point_size_data_prediction_dynamics) +
+    geom_line(size = 1) +
+    labs(x = "Blue in news station", y = "Confidence in blue") +
+    scale_color_manual(values = custom_colours$source_types,
+                       name = "News Stations",
+                       labels = custom_labels$source_type) +
+    theme(
+       aspect.ratio = 1,
+       panel.background = element_rect(fill='transparent'),
+       plot.background = element_rect(fill='transparent', color=NA),
+       panel.grid.major = element_blank(),
+       panel.grid.minor = element_blank(),
+       legend.background = element_rect(fill='transparent',linewidth = 0),
+       legend.box.background = element_rect(fill='transparent',linewidth = 0)
+     ) + 
+    scale_y_continuous(breaks = c(0,.5,1)) 
+  
+pl_optimal_response
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_explainer_optimal_response.pdf",
+  pl_optimal_response,
+  height = 3.5,
+  width = 5.5
+)
+```
+
+# Source distributions
+
+```{r}
+pl_helpful_dis <- plot_source_distribution("helpful", game_attributes) +
+  ggtitle("Helpful") +
+  ylim(0,.6) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.title.position = 'plot', 
+    plot.title = element_text(hjust = 0.5, colour = custom_colours$source_types[1]),
+    axis.title.x = element_blank(),
+    panel.background = element_rect(fill='transparent'),
+     plot.background = element_rect(fill='transparent', color=NA),
+     panel.grid.major = element_blank(),
+     panel.grid.minor = element_blank(),
+     legend.background = element_rect(fill='transparent',linewidth = 0),
+     legend.box.background = element_rect(fill='transparent',linewidth = 0)
+  ) + 
+  guides(fill = "none") 
+
+pl_random_dis <- plot_source_distribution("random", game_attributes) +
+  ggtitle("Random") +
+  ylim(0,.6) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.title.position = 'plot', 
+    plot.title =  element_text(hjust = 0.5, colour = custom_colours$source_types[2]),
+    axis.title.x = element_blank(),
+        panel.background = element_rect(fill='transparent'),
+     plot.background = element_rect(fill='transparent', color=NA),
+     panel.grid.major = element_blank(),
+     panel.grid.minor = element_blank(),
+     legend.background = element_rect(fill='transparent',linewidth = 0),
+     legend.box.background = element_rect(fill='transparent',linewidth = 0)
+  ) + 
+  guides(fill = "none")
+
+pl_opposite_dis <- plot_source_distribution("opposite", game_attributes) +
+  ggtitle("Opposite") +
+  ylim(0,.6) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.title.position = 'plot', 
+    plot.title = element_text(hjust = 0.5, colour = custom_colours$source_types[3]),
+        panel.background = element_rect(fill='transparent'),
+     plot.background = element_rect(fill='transparent', color=NA),
+     panel.grid.major = element_blank(),
+     panel.grid.minor = element_blank(),
+     legend.background = element_rect(fill='transparent',linewidth = 0),
+     legend.box.background = element_rect(fill='transparent',linewidth = 0)
+  ) + 
+  guides(fill = "none")
+
+pl_bias_dis <- plot_source_distribution("bluebias", game_attributes) +
+  ggtitle("Blue-biased") +
+  ylim(0,.6) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_blank(),
+    axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.title.position = 'plot', 
+    plot.title = element_text(hjust = 0.5, colour = custom_colours$source_types[4]),
+        panel.background = element_rect(fill='transparent'),
+     plot.background = element_rect(fill='transparent', color=NA),
+     panel.grid.major = element_blank(),
+     panel.grid.minor = element_blank(),
+     legend.background = element_rect(fill='transparent',linewidth = 0),
+     legend.box.background = element_rect(fill='transparent',linewidth = 0)
+  ) + 
+  guides(fill = "none")
+
+
+```
+
+
+```{r, fig.height=3.5, fig.width=5.5}
+pls_source_dis <- pl_helpful_dis + pl_random_dis + pl_opposite_dis + pl_bias_dis & 
+  theme(        panel.background = element_rect(fill='transparent'),
+     plot.background = element_rect(fill='transparent', color=NA),
+     panel.grid.major = element_blank(),
+     panel.grid.minor = element_blank(),
+     legend.background = element_rect(fill='transparent',linewidth = 0),
+     legend.box.background = element_rect(fill='transparent',linewidth = 0))
+pls_source_dis
+```
+
+```{r}
+ggsave(
+  "plots/plos_cb/fig_explainer_distributions.pdf",
+  pls_source_dis,
+  height = 3.5,
+  width = 5.5
+)
+```
+
+
+# Belief state evolution
+
+# Plot evolution of belief state in ground truth learner
+
+```{r}
+set.seed(4)
+
+game_attributes$news_station_first <- TRUE
+game_attributes$with_independent_council <- FALSE
+
+example_game <- get_game(game_attributes, "helpful")
+
+set_up_default_learner_type_l(type = "ground_truth", game_attributes = game_attributes)
+
+list_game_ran <- run_learner_on_game(df_game = example_game,
+                                      learner_type = learner_type_l,
+                                      game_attributes = game_attributes,
+                                      agent_name = 1,
+                                      function_output = "df_game_and_learner_output")
+
+plot_resolution <- 100
+
+probabilities_for_plot <- seq(0.001, 0.999, length.out = plot_resolution)
+
+df_belief_state_plot_ground_truth <- 
+  data.frame(probabilities = rep(probabilities_for_plot, game_attributes$n_trials),
+             trial = rep(1:game_attributes$n_trials, each = plot_resolution),
+             density_b = NA,
+             density_g = NA)
+
+for (i in 1:game_attributes$n_trials) {
+  
+  alpha_b_temp <- list_game_ran$learner_output$alpha_b[i]
+  beta_b_temp <- list_game_ran$learner_output$beta_b[i]
+  alpha_g_temp <- list_game_ran$learner_output$alpha_g[i]
+  beta_g_temp <- list_game_ran$learner_output$beta_g[i]
+  
+  df_belief_state_plot_ground_truth[df_belief_state_plot_ground_truth$trial == i, ]$density_b =
+    dbeta(x = probabilities_for_plot,
+          shape1 = alpha_b_temp,
+          shape2 = beta_b_temp)
+  
+  df_belief_state_plot_ground_truth[df_belief_state_plot_ground_truth$trial == i, ]$density_g =
+    dbeta(x = probabilities_for_plot,
+          shape1 = alpha_g_temp,
+          shape2 = beta_g_temp)
+}
+```
+
+
+```{r, fig.height=3.5, fig.width=4.5}
+df_belief_state_plot_ground_truth %>% 
+  ggplot(aes(probabilities, density_b, colour = as.factor(trial))) +
+    geom_line(size = 1) +
+    scale_color_discrete_sequential(palette = "Teal") +
+    guides(colour=FALSE) +
+    labs(y = "Density", x = expression(b["I"])) +
+    geom_vline(xintercept = .75, colour = "darkgrey", size = 2, alpha = .5) + 
+    annotate("text", x=.53, y=7.5, label= "True Value", col="darkgrey", size = 6.5) +
+    scale_x_continuous(breaks = c(0,.5,1)) + 
+    theme(
+     axis.line.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+```
+
+
